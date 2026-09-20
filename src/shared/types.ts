@@ -6,9 +6,37 @@ export type LauncherActionType =
   /** A pinned calculation (Calculator History) — a live value, like a Widget row. */
   | "calculation";
 
+/**
+ * The section a launcher row is listed under. "Results" is what every row
+ * becomes once the user types a query.
+ */
+export type ActionGroup = "Pinned" | "Commands" | "Applications" | "Results";
+
+/** Section order in the empty-query list. "Results" only ever appears alone. */
+export const ACTION_GROUP_ORDER: readonly ActionGroup[] = [
+  "Pinned",
+  "Commands",
+  "Applications",
+  "Results",
+];
+
+/** The group an action lands in when its source doesn't pick one; pinned ones head the list. */
+export function defaultActionGroup(
+  action: Pick<LauncherAction, "type" | "pinned">,
+): ActionGroup {
+  if (action.pinned) return "Pinned";
+  return action.type === "application" ? "Applications" : "Commands";
+}
+
 export interface LauncherAction {
   id: string;
   title: string;
+  /**
+   * Section this row is listed under. A source may set it; `query()` always
+   * fills it in before it crosses IPC (defaulting from `type`, and forcing
+   * "Results" while a query is typed), so the renderer can rely on it.
+   */
+  group?: ActionGroup;
   subtitle?: string;
   /** Emoji, single/few characters, or an image URL (http(s):/data:/file:) */
   icon?: string;

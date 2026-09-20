@@ -1,11 +1,14 @@
 import { app } from "electron";
 import type { IpcMain } from "electron";
 import { join } from "node:path";
-import type {
-  CalculatorSettings,
-  ExecuteResult,
-  QueryResult,
-  RequestSubtitleOptions,
+import {
+  ACTION_GROUP_ORDER,
+  defaultActionGroup,
+  type ActionGroup,
+  type CalculatorSettings,
+  type ExecuteResult,
+  type QueryResult,
+  type RequestSubtitleOptions,
 } from "../shared/types";
 import { evaluate } from "./calculator";
 import { matchAction } from "@shared/search";
@@ -259,12 +262,17 @@ export async function query(text: string): Promise<QueryResult> {
     // Actions flagged "Hide in Root Search" are dropped here but still returned
     // for an explicit query below.
     const scores = usage.scores();
+    const groupRank = (group: ActionGroup) => ACTION_GROUP_ORDER.indexOf(group);
     const result = definitions
-      .map((definition) => definition.action)
+      .map(({ action }) => ({
+        ...action,
+        group: action.group ?? defaultActionGroup(action),
+      }))
       .filter((action) => !action.hidden)
       .sort((a, b) => {
-        const pinDelta = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
-        if (pinDelta) return pinDelta;
+        // Sections first (Pinned, Commands, Applications), then usage within each.
+        const groupDelta = groupRank(a.group) - groupRank(b.group);
+        if (groupDelta) return groupDelta;
         return (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0);
       });
     return { result };
@@ -285,7 +293,7 @@ export async function query(text: string): Promise<QueryResult> {
     .filter((entry) => entry.matched)
     // Best score first; `sort` is stable, so equal scores keep registry order.
     .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.action);
+    .map((entry) => ({ ...entry.action, group: "Results" as const }));
 
   const calculation = evaluate(trimmed);
   return calculation ? { result, calculation } : { result };

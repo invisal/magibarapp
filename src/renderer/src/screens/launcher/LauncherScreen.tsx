@@ -400,6 +400,10 @@ function LauncherScreen() {
     <ListScreen<Row>
       data={rows}
       getId={(row) => row.key}
+      // Main always sends `group`; the calc row is the answer, so it heads "Results".
+      getGroup={(row) =>
+        row.kind === "calc" ? "Results" : (row.action.group ?? "Commands")
+      }
       renderItem={(row, { highlighted }) =>
         row.kind === "calc" ? (
           <CalculatorPanel
