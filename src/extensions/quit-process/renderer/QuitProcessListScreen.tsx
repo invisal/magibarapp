@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "cnfast";
-import {
-  ListScreen,
-  LIST_SCREEN_ITEM_HEIGHT,
-  type FooterMenuItem,
-} from "@renderer/shared/ui";
+import { ListScreen, type FooterMenuItem } from "@renderer/shared/ui";
 import { isMac } from "@renderer/lib/shortcut";
 import { useShortcut } from "@renderer/lib/use-shortcut";
 import { formatCpu, formatMemory } from "../shared/format";
@@ -418,8 +414,6 @@ function QuitProcessListScreen({
       }}
       inputSuffix={<SortToggle sortBy={sortBy} onChange={setSortBy} />}
       placeholder="Search by name or port..."
-      virtualized
-      itemHeight={() => LIST_SCREEN_ITEM_HEIGHT}
       renderItem={(item) => (
         <ListScreen.Item
           highlighted={item.id === selected?.id}

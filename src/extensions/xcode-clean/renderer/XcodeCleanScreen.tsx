@@ -11,22 +11,6 @@ import {
 } from "../shared/format";
 import type { CleanCategory, CleanItem, ScanSnapshot } from "../shared/types";
 
-/** A category heading with its total, inlined into the row list. */
-interface HeaderRow {
-  kind: "header";
-  key: string;
-  category: CleanCategory;
-}
-
-interface ItemRow {
-  kind: "item";
-  item: CleanItem;
-}
-
-type Row = HeaderRow | ItemRow;
-
-const HEADER_ROW_HEIGHT = 34;
-const ITEM_ROW_HEIGHT = 40;
 /** How long the footer's "press again to delete" stays armed. */
 const CONFIRM_MS = 4000;
 
@@ -48,21 +32,19 @@ function sizeLabel(bytes: number | null): string {
   return bytes == null ? "…" : formatBytes(bytes);
 }
 
-/** Header + items per category, keeping only what matches `query` (a header only survives with a match). */
-function buildRows(categories: CleanCategory[], query: string): Row[] {
+/** Items matching `query`, in category order so each category's run is contiguous for grouping. */
+function matchingItems(
+  categories: CleanCategory[],
+  query: string,
+): CleanItem[] {
   const q = query.trim().toLowerCase();
-  const rows: Row[] = [];
-  for (const category of categories) {
-    const items = q
+  return categories.flatMap((category) =>
+    q
       ? category.items.filter((i) =>
           `${i.title} ${i.subtitle ?? ""} ${i.path}`.toLowerCase().includes(q),
         )
-      : category.items;
-    if (items.length === 0) continue;
-    rows.push({ kind: "header", key: `header:${category.id}`, category });
-    for (const item of items) rows.push({ kind: "item", item });
-  }
-  return rows;
+      : category.items,
+  );
 }
 
 function Checkbox({
@@ -213,7 +195,7 @@ function ItemDetail({
 
 /**
  * The Clean Xcode screen, pushed onto the launcher's stack. Same shape as
- * Clipboard History — grouped virtualized list on the left, detail pane on the
+ * Clipboard History — grouped list on the left, detail pane on the
  * right — but each row is a checkbox: tick what to delete, then clean the lot
  * in one confirmed step. The detail pane pairs a storage breakdown of every
  * category with what deleting the highlighted item would cost.
@@ -259,15 +241,15 @@ function XcodeCleanScreen() {
     [],
   );
 
-  const rows = useMemo(
-    () => (categories ? buildRows(categories, query) : null),
+  const items = useMemo(
+    () => (categories ? matchingItems(categories, query) : null),
     [categories, query],
   );
-  const itemCount = rows?.filter((r) => r.kind === "item").length ?? 0;
+  const itemCount = items?.length ?? 0;
 
   const focused =
     (categories && focusedId && findItem(categories, focusedId)) ||
-    (rows?.find((r): r is ItemRow => r.kind === "item")?.item ?? null);
+    (items?.[0] ?? null);
   const focusedCategory =
     focused && categories?.find((c) => c.id === focused.categoryId);
 
@@ -397,57 +379,52 @@ function XcodeCleanScreen() {
 
   return (
     <ListScreen
-      data={rows}
-      getId={(row) => (row.kind === "header" ? row.key : row.item.id)}
+      data={items}
+      getId={(item) => item.id}
+      getGroup={(item) => item.categoryId}
+      renderGroupLabel={(id) => {
+        const category = categories?.find((c) => c.id === id);
+        if (!category) return id;
+        return (
+          <span className="flex items-center justify-between">
+            <span>
+              {category.glyph} {category.title}
+            </span>
+            <span>
+              {category.pending ? "Calculating…" : formatBytes(category.bytes)}
+            </span>
+          </span>
+        );
+      }}
       inputValue={query}
       onInputChange={setQuery}
       serverFiltered
-      isDisabled={(row) => row.kind === "header"}
       placeholder="Search Xcode caches..."
-      virtualized
-      itemHeight={(row) =>
-        row.kind === "header" ? HEADER_ROW_HEIGHT : ITEM_ROW_HEIGHT
-      }
-      renderItem={(row) =>
-        row.kind === "header" ? (
-          <div className="flex h-full items-end justify-between px-1.5 pb-1 text-xs font-medium text-foreground-subtle">
-            <span>
-              {row.category.glyph} {row.category.title}
-            </span>
-            <span>
-              {row.category.pending
-                ? "Calculating…"
-                : formatBytes(row.category.bytes)}
-            </span>
-          </div>
-        ) : (
-          <ListScreen.Item
-            highlighted={row.item.id === focused?.id}
-            icon={
-              <Checkbox
-                checked={selected.has(row.item.id)}
-                onToggle={() => toggle(row.item.id)}
-              />
-            }
-            title={row.item.title}
-            badge={sizeLabel(row.item.bytes)}
-            onDoubleClick={() => toggle(row.item.id)}
-          />
-        )
-      }
+      renderItem={(item) => (
+        <ListScreen.Item
+          highlighted={item.id === focused?.id}
+          icon={
+            <Checkbox
+              checked={selected.has(item.id)}
+              onToggle={() => toggle(item.id)}
+            />
+          }
+          title={item.title}
+          badge={sizeLabel(item.bytes)}
+          onDoubleClick={() => toggle(item.id)}
+        />
+      )}
       // A plain click only focuses the row; Enter (handled in `onInputKeyDown`,
       // where Base UI's synthetic click for it stays inert) ticks it.
-      onActivate={(row) => {
-        if (row.kind === "item") setFocusedId(row.item.id);
-      }}
-      onInputKeyDown={(e, row) => {
+      onActivate={(item) => setFocusedId(item.id)}
+      onInputKeyDown={(e, item) => {
         if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
         e.preventDefault();
         if (e.metaKey || e.ctrlKey) cleanSelected();
-        else if (row?.kind === "item") toggle(row.item.id);
+        else if (item) toggle(item.id);
       }}
-      onHighlightChange={(row) => {
-        if (row?.kind === "item") setFocusedId(row.item.id);
+      onHighlightChange={(item) => {
+        if (item) setFocusedId(item.id);
       }}
       menu={menu}
       detail={() =>

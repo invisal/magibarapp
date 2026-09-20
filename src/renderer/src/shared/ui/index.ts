@@ -5,6 +5,7 @@ export { WindowFrame } from "./WindowFrame";
 export { Breadcrumb } from "./Breadcrumb";
 export { Layout } from "./Layout";
 export { ListScreen, LIST_SCREEN_ITEM_HEIGHT } from "./ListScreen";
+export { useOnceVisible } from "./useOnceVisible";
 export { Detail } from "./Detail";
 export { Footer } from "./Footer";
 export type { ButtonProps, FooterMenuItem, FooterMenuProps } from "./Footer";

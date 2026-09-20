@@ -13,12 +13,12 @@ import {
   type RefObject,
 } from "react";
 import { Autocomplete } from "@base-ui/react/autocomplete";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "cnfast";
 import { formatShortcut } from "@renderer/lib/shortcut";
 import { iconSrc } from "@renderer/lib/icon";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import { Footer, type FooterMenuItem } from "./Footer";
+import { ListScrollRootContext } from "./useOnceVisible";
 
 /**
  * A full-screen, launcher-style list: a frameless search header, a scrolling
@@ -44,12 +44,17 @@ import { Footer, type FooterMenuItem } from "./Footer";
  * plain CSS `:hover` background instead (give `ListScreen.Item` one — it
  * already has `hover:bg-item-hover`).
  *
- * Unvirtualized by default — fine for bounded lists (the Widget manager).
- * Pass `virtualized` + `itemHeight` to switch to `@tanstack/react-virtual`
- * for long/unbounded lists (see `measureItem` for rows that can grow past
- * their estimate). Pass `serverFiltered` when `data` is already filtered and
- * ranked upstream (e.g. a main-process query), so `ListScreen` renders it
- * as-is instead of re-filtering it against the query text.
+ * Plain DOM, not virtualized — fine for the few hundred rows a launcher list
+ * holds. Rows carry `content-visibility: auto` so the browser skips
+ * layout/paint for off-screen ones; a row that does expensive work on mount
+ * (a Widget fetching its subtitle) should gate it on `useOnceVisible`. Pass
+ * `serverFiltered` when `data` is already filtered and ranked upstream (e.g. a
+ * main-process query), so `ListScreen` renders it as-is instead of
+ * re-filtering it against the query text.
+ *
+ * Pass `getGroup` to section the list under Base UI `Autocomplete.Group`
+ * headings. Rows stay a flat `data` array; groups form in first-seen order. A
+ * list that ends up with a single group renders flat, with no header.
  */
 
 /* --------------------------------- item -------------------------------- */
@@ -196,6 +201,11 @@ interface ListScreenBaseProps<T> {
   getId: (item: T) => string;
   /** Draw one row — return a single element, normally `<ListScreen.Item>`. */
   renderItem: (item: T, state: { highlighted: boolean }) => ReactElement;
+  /** Section key per row. Rows sharing a key form one group, headed by
+   *  `renderGroupLabel`; with fewer than two groups no header is shown. */
+  getGroup?: (item: T) => string;
+  /** Group heading content. Default: the group key. */
+  renderGroupLabel?: (group: string, items: T[]) => ReactNode;
 
   /** ⌘K + right-click menu, rebuilt from the current highlighted row.
    *  Renders via the built-in `Footer.Menu` (a flat, searchable list —
@@ -286,31 +296,19 @@ interface ListScreenBaseProps<T> {
   onMenuOpenChange?: (open: boolean) => void;
 }
 
-type ListScreenVirtualProps<T> =
-  | { virtualized?: false; itemHeight?: never; measureItem?: never }
-  | {
-      /** Switch row rendering to `@tanstack/react-virtual`, for long or
-       *  unbounded lists. */
-      virtualized: true;
-      /** Row height in px, per item — the virtualizer's fixed/estimated
-       *  size. Required: a mismatched real height silently produces
-       *  overlapping/gapped rows rather than an error. */
-      itemHeight: (item: T) => number;
-      /** Rows that can grow past `itemHeight`'s estimate (e.g. wrap onto
-       *  more than one line) opt into measurement via a ResizeObserver: they
-       *  render at their natural height and the list re-flows around it.
-       *  Sizes are cached per `getId`, so a measured row's height never
-       *  leaks onto a different row that later takes its position. Omit if
-       *  every row is truly fixed-height — cheaper. */
-      measureItem?: (item: T) => boolean;
-    };
+type ListScreenProps<T> = ListScreenBaseProps<T>;
 
-type ListScreenProps<T> = ListScreenBaseProps<T> & ListScreenVirtualProps<T>;
+interface Group<T> {
+  value: string;
+  items: T[];
+}
 
 function ListScreenRoot<T>({
   data,
   getId,
   renderItem,
+  getGroup,
+  renderGroupLabel,
   menu,
   onActivate,
   detail,
@@ -330,9 +328,6 @@ function ListScreenRoot<T>({
   inputPrefix,
   inputSuffix,
   autoRefocus = false,
-  virtualized = false,
-  itemHeight,
-  measureItem,
   isDisabled,
   onHighlightChange,
   onMenuOpenChange,
@@ -354,7 +349,6 @@ function ListScreenRoot<T>({
   };
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const lastHighlightedIndex = useRef<number | null>(null);
 
   useEffect(() => {
     function focusAndSelect(): void {
@@ -384,30 +378,34 @@ function ListScreenRoot<T>({
     );
   }, [data, query, filter, getSearchText, getId, serverFiltered]);
 
-  // `itemHeight` is only absent when `virtualized` is false, in which case
-  // the virtualizer below is created but never rendered from — the type
-  // union (see `ListScreenVirtualProps`) guarantees callers that opt into
-  // `virtualized` supply it.
-  const virtualizer = useVirtualizer({
-    count: visible.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (index) =>
-      virtualized ? itemHeight!(visible[index]) : LIST_SCREEN_ITEM_HEIGHT,
-    // Key measured sizes by row identity, not position. Keyed by index (the
-    // default), a measured row's height sticks to its *slot*: when the
-    // launcher's calculator panel (index 0) goes away, whichever row slides
-    // into index 0 would inherit the panel's measured height.
-    getItemKey: (index) => (visible[index] ? getId(visible[index]) : index),
-    overscan: 8,
-    gap: 1,
-  });
+  // Sections, in first-seen order. Fewer than two of them and the list is
+  // rendered flat — a lone header would just be noise.
+  const groups = useMemo<Group<T>[] | null>(() => {
+    if (!getGroup) return null;
+    const byKey = new Map<string, T[]>();
+    for (const item of visible) {
+      const key = getGroup(item);
+      const bucket = byKey.get(key);
+      if (bucket) bucket.push(item);
+      else byKey.set(key, [item]);
+    }
+    return byKey.size > 1
+      ? [...byKey].map(([value, items]) => ({ value, items }))
+      : null;
+  }, [visible, getGroup]);
+
+  // Display order — what Base UI walks for keyboard navigation.
+  const ordered = useMemo(
+    () => (groups ? groups.flatMap((g) => g.items) : visible),
+    [groups, visible],
+  );
 
   // The highlighted row, falling back to the first *selectable* one — the
   // target both the `menu` builder and `onInputKeyDown`'s second arg
   // receive. Skips a disabled row (e.g. a section heading inlined into
   // `data`) rather than landing on it before anything's been highlighted.
   const menuTarget =
-    highlighted ?? visible.find((item) => !isDisabled?.(item)) ?? null;
+    highlighted ?? ordered.find((item) => !isDisabled?.(item)) ?? null;
 
   // Whether this screen is pushed on top of something — i.e. whether "back"
   // is a real place to go, as opposed to the launcher root's `onExit`, which
@@ -446,9 +444,43 @@ function ListScreenRoot<T>({
       ? customFooter({ inputRef })
       : customFooter;
 
+  const renderRow = (item: T) => {
+    const disabled = isDisabled?.(item) ?? false;
+    return (
+      <Autocomplete.Item
+        key={getId(item)}
+        value={item}
+        disabled={disabled}
+        onClick={(e) => !disabled && onActivate?.(item, e)}
+        onContextMenu={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          setHighlighted(item);
+          onHighlightChange?.(item, "pointer");
+          setMenuOpen(true);
+        }}
+        // Off-screen rows skip layout and paint; `auto` remembers a row's
+        // real height once rendered, so a tall row (the calculator panel)
+        // isn't pinned to the 40px estimate.
+        style={{
+          contentVisibility: "auto",
+          containIntrinsicSize: `auto ${LIST_SCREEN_ITEM_HEIGHT}px`,
+        }}
+        render={(props, state) =>
+          cloneElement(
+            renderItem(item, { highlighted: state.highlighted }),
+            props,
+          )
+        }
+      />
+    );
+  };
+
   return (
     <Autocomplete.Root
-      items={visible}
+      // Base UI reads a `{ items }[]` array as grouped and a plain array as
+      // flat; its overloads can't express the runtime union, hence the cast.
+      items={(groups ?? visible) as T[]}
       value={query}
       onValueChange={setQuery}
       mode="none"
@@ -462,21 +494,10 @@ function ListScreenRoot<T>({
       // CSS `:hover` background (`hover:bg-item-hover` on the row), distinct
       // from the cursor's `bg-item-selected`.
       highlightItemOnHover={false}
-      onItemHighlighted={(item, { index, reason }) => {
+      onItemHighlighted={(item, { reason }) => {
         const value = (item as T | undefined) ?? null;
         setHighlighted(value);
         onHighlightChange?.(value, reason);
-        // Rows are rebuilt (new object identities) whenever `data` changes,
-        // which re-fires this even though the highlighted *index* hasn't
-        // moved — only scroll on an actual index change, so a data refresh
-        // doesn't yank a virtualized list back to the highlighted row while
-        // the user has scrolled elsewhere.
-        if (virtualized && value && index !== lastHighlightedIndex.current) {
-          lastHighlightedIndex.current = index;
-          queueMicrotask(() =>
-            virtualizer.scrollToIndex(index, { align: "auto" }),
-          );
-        }
       }}
     >
       <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -521,86 +542,24 @@ function ListScreenRoot<T>({
               detail ? "w-[38%] shrink-0 border-r border-border" : "flex-1",
             )}
           >
-            {virtualized ? (
-              <Autocomplete.List
-                className="relative w-full"
-                style={{ height: virtualizer.getTotalSize() }}
-              >
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const item = visible[virtualRow.index];
-                  if (!item) return null;
-                  const measure = measureItem?.(item) ?? false;
-                  const disabled = isDisabled?.(item) ?? false;
-                  return (
-                    <Autocomplete.Item
-                      key={getId(item)}
-                      value={item}
-                      index={virtualRow.index}
-                      disabled={disabled}
-                      onClick={(e) => !disabled && onActivate?.(item, e)}
-                      onContextMenu={(e) => {
-                        if (disabled) return;
-                        e.preventDefault();
-                        setHighlighted(item);
-                        onHighlightChange?.(item, "pointer");
-                        setMenuOpen(true);
-                      }}
-                      {...(measure
-                        ? {
-                            ref: virtualizer.measureElement,
-                            "data-index": virtualRow.index,
-                          }
-                        : {})}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        // A measured row must size to its own content — pinning
-                        // it to `virtualRow.size` would clip what grows past the
-                        // estimate and feed that same pinned height back into
-                        // the measurement, so it could never grow.
-                        height: measure ? undefined : virtualRow.size,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                      render={(props, state) =>
-                        cloneElement(
-                          renderItem(item, { highlighted: state.highlighted }),
-                          props,
-                        )
-                      }
-                    />
-                  );
-                })}
-              </Autocomplete.List>
-            ) : (
+            <ListScrollRootContext.Provider value={scrollContainerRef}>
               <Autocomplete.List className="relative w-full">
-                {(item: T) => {
-                  const disabled = isDisabled?.(item) ?? false;
-                  return (
-                    <Autocomplete.Item
-                      key={getId(item)}
-                      value={item}
-                      disabled={disabled}
-                      onClick={(e) => !disabled && onActivate?.(item, e)}
-                      onContextMenu={(e) => {
-                        if (disabled) return;
-                        e.preventDefault();
-                        setHighlighted(item);
-                        onHighlightChange?.(item, "pointer");
-                        setMenuOpen(true);
-                      }}
-                      render={(props, state) =>
-                        cloneElement(
-                          renderItem(item, { highlighted: state.highlighted }),
-                          props,
-                        )
-                      }
-                    />
-                  );
-                }}
+                {groups
+                  ? (group: Group<T>) => (
+                      <Autocomplete.Group key={group.value} items={group.items}>
+                        <Autocomplete.GroupLabel className="px-1.5 pt-2 pb-1 text-xs font-medium text-foreground-subtle">
+                          {renderGroupLabel
+                            ? renderGroupLabel(group.value, group.items)
+                            : group.value}
+                        </Autocomplete.GroupLabel>
+                        <Autocomplete.Collection>
+                          {renderRow}
+                        </Autocomplete.Collection>
+                      </Autocomplete.Group>
+                    )
+                  : renderRow}
               </Autocomplete.List>
-            )}
+            </ListScrollRootContext.Provider>
 
             {visible.length === 0 && (
               <div className="px-3 py-2 text-sm text-foreground-subtle">
