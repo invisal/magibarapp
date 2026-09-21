@@ -17,7 +17,7 @@ export function WindowsKeyIcon({ className }: { className?: string }) {
       viewBox="0 0 88 88"
       aria-hidden
       className={cn(
-        "inline-block h-[0.72em] w-[0.72em] -translate-y-[0.04em] align-middle fill-current",
+        "inline-block h-[0.72em] w-[0.72em] translate-y-[-0.04em] align-middle fill-current",
         className,
       )}
     >
