@@ -208,4 +208,24 @@ export const IPC_CHANNELS = {
   /** Settings window ↔ main: read / rebind the global toggle shortcut. */
   hotkeyGet: "settings:hotkey-get",
   hotkeySet: "settings:hotkey-set",
+  /**
+   * Shared by every shortcut-recorder UI (the toggle row in Settings, and
+   * `HotkeyPanel`'s per-action "Set Hotkey…" in the launcher window) — not
+   * settings-specific, so no `settings:` prefix. On Windows, `captureStart`
+   * turns on native forwarding of `Win`-involving keystrokes (see
+   * `main/native/hotkeys.ts` / `HotkeyWatcher::start_capture` in
+   * `native/win/src/lib.rs`) for as long as recording is active, since a
+   * lone `Win` tap or a `Win+<key>` combo never reaches a plain focused
+   * window's own keydown handler at all — the same interception problem
+   * `RegisterHotKey` has for *registering* one, just hit during capture
+   * instead. `hotkeyCaptured` is the push channel carrying each captured
+   * accelerator string; a key that doesn't involve `Win` is untouched and
+   * keeps reaching the renderer's own keydown listener exactly as before,
+   * so this is additive, not a replacement for DOM-based capture. A no-op
+   * pair on mac/linux (or if the native addon fails to load) — that capture
+   * path there is unchanged, DOM-only.
+   */
+  hotkeyCaptureStart: "hotkey:capture-start",
+  hotkeyCaptureStop: "hotkey:capture-stop",
+  hotkeyCaptured: "hotkey:captured",
 } as const;

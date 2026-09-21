@@ -1,8 +1,8 @@
 import { cn } from "cnfast";
 import { useEffect, useRef, useState, type ComponentPropsWithRef } from "react";
 import type { LauncherAction } from "../../../../../shared/types";
-import { formatShortcut } from "@renderer/lib/shortcut";
 import { iconSrc } from "@renderer/lib/icon";
+import { ShortcutLabel } from "@renderer/shared/ui";
 import { useOnceVisible } from "@renderer/shared/ui/useOnceVisible";
 
 const TYPE_LABEL: Record<LauncherAction["type"], string> = {
@@ -145,12 +145,12 @@ function SearchItem({
             title="Global hotkey"
             className="shrink-0 rounded border border-border px-1.5 py-0.5 font-sans text-xs text-foreground-subtle"
           >
-            {formatShortcut(boundAccelerator)}
+            <ShortcutLabel accelerator={boundAccelerator} />
           </kbd>
         )}
         {shortcut && highlighted ? (
           <kbd className="shrink-0 rounded border border-border px-1.5 py-0.5 font-sans text-xs text-foreground-subtle">
-            {formatShortcut(shortcut)}
+            <ShortcutLabel accelerator={shortcut} />
           </kbd>
         ) : loading ? (
           <Spinner />

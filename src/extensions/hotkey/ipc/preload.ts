@@ -10,12 +10,19 @@ import type {
 export const actionHotkeysApi = {
   list: (): Promise<Record<string, ActionHotkeyBinding>> =>
     ipcRenderer.invoke(HOTKEY_CHANNELS.list),
+  /**
+   * `force: true` reassigns `accelerator` away from whatever other action
+   * currently holds it (see `ActionHotkeySetResult.reason`) instead of
+   * failing with `"conflict"`. Never reassigns the app's own toggle shortcut
+   * — that always fails with `reason: "toggle"` regardless of `force`.
+   */
   set: (
     actionId: string,
     accelerator: string,
     type: ActionHotkeyBinding["type"],
+    force?: boolean,
   ): Promise<ActionHotkeySetResult> =>
-    ipcRenderer.invoke(HOTKEY_CHANNELS.set, actionId, accelerator, type),
+    ipcRenderer.invoke(HOTKEY_CHANNELS.set, actionId, accelerator, type, force),
   remove: (actionId: string): Promise<void> =>
     ipcRenderer.invoke(HOTKEY_CHANNELS.remove, actionId),
   /**

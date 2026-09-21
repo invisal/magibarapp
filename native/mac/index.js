@@ -699,6 +699,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.HotkeyWatcher = nativeBinding.HotkeyWatcher
 module.exports.applyWindowRect = nativeBinding.applyWindowRect
 module.exports.dirSize = nativeBinding.dirSize
 module.exports.frontmostPid = nativeBinding.frontmostPid
@@ -708,4 +709,5 @@ module.exports.killProcess = nativeBinding.killProcess
 module.exports.listListeningPorts = nativeBinding.listListeningPorts
 module.exports.listProcesses = nativeBinding.listProcesses
 module.exports.pasteboardChangeCount = nativeBinding.pasteboardChangeCount
+module.exports.startHotkeyWatcher = nativeBinding.startHotkeyWatcher
 module.exports.toggleFullscreen = nativeBinding.toggleFullscreen

@@ -47,7 +47,7 @@ const OTHER_LABELS: Record<string, string> = {
   option: "Alt",
   alt: "Alt",
   shift: "Shift",
-  super: "Super",
+  super: "Win",
   meta: "Super",
   space: "Space",
   plus: "+",
@@ -198,15 +198,113 @@ export function eventToAccelerator(
   return [...modifiers, key].join("+");
 }
 
+/**
+ * Sentinel accelerator for "the Windows/Command key alone" — mirrors
+ * `LONE_SUPER_HOTKEY` in `main/native/hotkeys.ts`. Electron's accelerator
+ * grammar has no way to express a modifier with no key, so this literal
+ * (never a real accelerator string `eventToAccelerator` would otherwise
+ * produce) is what a shortcut recorder emits for a clean tap.
+ */
+export const LONE_SUPER_HOTKEY = "Super";
+
+/**
+ * Tracks whether a keydown is a still-live "solo tap" candidate for
+ * {@link LONE_SUPER_HOTKEY}, mirroring the same state machine the native
+ * Windows hook runs (`native/win/src/lib.rs`: `win_tap_candidate`) — a
+ * shortcut recorder feeds it every keydown/keyup it sees; `onKeyUp` returns
+ * the captured accelerator once the tap completes cleanly (Meta pressed and
+ * released with no other key in between), `null` otherwise. Only Meta/Super
+ * has this native-side support today — a bare Ctrl/Alt/Shift tap isn't
+ * offered, so this doesn't track those.
+ *
+ * `supported` should be `true` only on platforms whose native hotkey engine
+ * (`main/native/hotkeys.ts`) can actually register a modifier-only
+ * accelerator — Windows (`@magibar/win`'s `WH_KEYBOARD_LL` hook) and mac
+ * (`@magibar/mac`'s `CGEventTap`), i.e. `window.api.platform === "win32" ||
+ * "darwin"`. Everywhere else (Linux, or either platform if its native addon
+ * fails to load) falls back to `globalShortcut`, which has no way to
+ * register a modifier-only accelerator at all — without gating this, the
+ * tracker would still report {@link LONE_SUPER_HOTKEY} back to a recorder
+ * there, surfacing as a confusing "already in use" error for a combo nothing
+ * else is actually using.
+ *
+ * A caller wired to `window.api.hotkey.onCaptured` (both platforms above
+ * route a `mods+key` combo through that native channel, since the OS
+ * swallows it before this window's own keydown listener ever sees it) must
+ * call {@link cancel} whenever that channel reports *anything* mid-hold.
+ * Without it: pressing `Command+T` suppresses `T`'s keydown/keyup entirely
+ * (never reaching `onKeyDown` here to clear `candidate`), but the native
+ * side deliberately leaves `Command`'s own *eventual* keyup un-suppressed —
+ * so this tracker sees only "Meta down … Meta up" and misreads it as a
+ * clean solo tap, overwriting the just-reported `"Command+T"` with
+ * {@link LONE_SUPER_HOTKEY} the instant the user lets go of Cmd.
+ */
+export function createLoneSuperTapTracker(supported: boolean): {
+  onKeyDown: (event: KeyboardEvent) => void;
+  onKeyUp: (event: KeyboardEvent) => string | null;
+  cancel: () => void;
+} {
+  let candidate = false;
+  return {
+    onKeyDown(event) {
+      if (!supported || event.repeat) return;
+      candidate = event.key === "Meta";
+    },
+    onKeyUp(event) {
+      if (!supported) return null;
+      const wasCandidate = candidate && event.key === "Meta";
+      candidate = false;
+      return wasCandidate ? LONE_SUPER_HOTKEY : null;
+    },
+    cancel() {
+      candidate = false;
+    },
+  };
+}
+
+/** One display-ready token of a formatted shortcut — see {@link shortcutTokens}. */
+export interface ShortcutToken {
+  /** The symbol/label text this token normally renders as (`formatShortcut` joins exactly these). */
+  label: string;
+  /**
+   * True for the Win/Super modifier specifically, and only on non-mac (mac's
+   * own "⌘" glyph already looks fine as plain text) — lets a JSX renderer
+   * swap in a proper Windows-key icon instead of the `label` text, since
+   * there's no single Unicode glyph for it that looks as good as ⌘ does.
+   */
+  isWinKey: boolean;
+}
+
+function isWinKeyToken(token: string): boolean {
+  const key = token.toLowerCase();
+  return (
+    key === "super" || key === "meta" || key === "command" || key === "cmd"
+  );
+}
+
+/** Splits `accelerator` into display-ready tokens, in order — the shared
+ *  step behind both {@link formatShortcut} (joins them into plain text) and
+ *  `ShortcutLabel` (renders them as JSX, swapping the Win-key token for an
+ *  icon). */
+export function shortcutTokens(
+  accelerator: string,
+  mac: boolean = isMac(),
+): ShortcutToken[] {
+  const map = mac ? MAC_SYMBOLS : OTHER_LABELS;
+  return accelerator
+    .split("+")
+    .filter(Boolean)
+    .map((token) => ({
+      label: map[token.toLowerCase()] ?? token.toUpperCase(),
+      isWinKey: !mac && isWinKeyToken(token),
+    }));
+}
+
 export function formatShortcut(
   accelerator: string,
   mac: boolean = isMac(),
 ): string {
-  const map = mac ? MAC_SYMBOLS : OTHER_LABELS;
-  const tokens = accelerator
-    .split("+")
-    .filter(Boolean)
-    .map((token) => map[token.toLowerCase()] ?? token.toUpperCase());
+  const tokens = shortcutTokens(accelerator, mac).map((t) => t.label);
 
   if (!mac) return tokens.join("+");
 

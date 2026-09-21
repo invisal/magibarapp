@@ -21,6 +21,9 @@ use windows::Win32::Graphics::Gdi::{
   BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ
 };
 use windows::Win32::Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_ItemNameDisplay};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+  SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY
+};
 use windows::Win32::System::Com::{
   CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
   CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READ
@@ -35,12 +38,14 @@ use windows::Win32::UI::Shell::{
   SLGP_RAWPATH
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-  CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, DrawIconEx,
-  GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowRect, IsIconic, IsZoomed,
-  PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW,
-  SetWindowPos, ShowWindow, TranslateMessage, DI_NORMAL, GWLP_USERDATA, HICON, HWND_MESSAGE, MSG,
-  SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE, WINDOW_EX_STYLE,
-  WINDOW_STYLE, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_DESTROY, WNDCLASSEXW
+  CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW,
+  DrawIconEx, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowRect, IsIconic,
+  IsZoomed, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow,
+  SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow, TranslateMessage,
+  UnhookWindowsHookEx, DI_NORMAL, GWLP_USERDATA, HHOOK, HICON, HWND_MESSAGE, KBDLLHOOKSTRUCT,
+  LLKHF_INJECTED, MSG, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_RESTORE,
+  WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLIPBOARDUPDATE, WM_CLOSE, WM_DESTROY,
+  WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW
 };
 
 /// COM must be initialized on whatever thread calls into these APIs. napi-rs runs
@@ -837,4 +842,749 @@ pub fn list_listening_ports() -> Vec<NativePort> {
         .collect()
     })
     .unwrap_or_default()
+}
+
+// -- Global hotkeys via a low-level keyboard hook --
+//
+// `RegisterHotKey` (what Electron's `globalShortcut` wraps) can't win against
+// Explorer's own hardcoded `Win+<key>` shortcuts (`Win+Space` switches input
+// language, `Win+E`/`L`/`D` are shell commands, …) — Explorer's shell hook
+// consumes those combos before a `RegisterHotKey` registration ever fires —
+// and it has no way to represent "a modifier alone" at all, which a bare-`Win`
+// binding needs. A `WH_KEYBOARD_LL` hook sees every keystroke system-wide
+// *before* Explorer does, so it can both detect and suppress what
+// `RegisterHotKey` can't reach. This mirrors `ClipboardWatcher` above
+// (background thread, hidden message-only window, `ThreadsafeFunction`
+// callback) but installs a keyboard hook instead of a clipboard listener.
+
+/// Physical side of a `Win` key press — only meaningful for the lone-tap
+/// (no other key pressed before release) case; a combo (`Win+Space`) doesn't
+/// care which side was held.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WinSide {
+  Left,
+  Right,
+}
+
+fn win_side(vk: u16) -> Option<WinSide> {
+  match vk {
+    0x5B => Some(WinSide::Left),  // VK_LWIN
+    0x5C => Some(WinSide::Right), // VK_RWIN
+    _ => None,
+  }
+}
+
+fn is_ctrl_vk(vk: u16) -> bool {
+  matches!(vk, 0x11 | 0xA2 | 0xA3) // VK_CONTROL, VK_LCONTROL, VK_RCONTROL
+}
+fn is_alt_vk(vk: u16) -> bool {
+  matches!(vk, 0x12 | 0xA4 | 0xA5) // VK_MENU, VK_LMENU, VK_RMENU
+}
+fn is_shift_vk(vk: u16) -> bool {
+  matches!(vk, 0x10 | 0xA0 | 0xA1) // VK_SHIFT, VK_LSHIFT, VK_RSHIFT
+}
+
+/// Electron-accelerator-token -> Win32 virtual-key code, for every token
+/// `src/renderer/src/lib/shortcut.ts`'s `eventToAccelerator`/`CODE_TO_KEY` can
+/// produce. Letters/digits are their own ASCII codes (Win32 convention);
+/// everything else is a stable, well-known VK constant, inlined as a literal
+/// rather than pulled in via `Win32_UI_Input_KeyboardAndMouse` so this module
+/// doesn't need that Cargo feature just for two dozen named constants.
+fn key_name_to_vk(token: &str) -> Option<u16> {
+  let mut chars = token.chars();
+  if let (Some(c), None) = (chars.next(), chars.next()) {
+    if c.is_ascii_alphabetic() {
+      return Some(c.to_ascii_uppercase() as u16);
+    }
+    if c.is_ascii_digit() {
+      return Some(c as u16);
+    }
+    return Some(match c {
+      ',' => 0xBC,  // VK_OEM_COMMA
+      '.' => 0xBE,  // VK_OEM_PERIOD
+      '/' => 0xBF,  // VK_OEM_2
+      '\\' => 0xDC, // VK_OEM_5
+      ';' => 0xBA,  // VK_OEM_1
+      '\'' => 0xDE, // VK_OEM_7
+      '[' => 0xDB,  // VK_OEM_4
+      ']' => 0xDD,  // VK_OEM_6
+      '-' => 0xBD,  // VK_OEM_MINUS
+      '=' => 0xBB,  // VK_OEM_PLUS
+      '`' => 0xC0,  // VK_OEM_3
+      _ => return None,
+    });
+  }
+  if let Some(rest) = token.strip_prefix('f') {
+    if let Ok(n) = rest.parse::<u16>() {
+      if (1..=24).contains(&n) {
+        return Some(0x70 + (n - 1)); // VK_F1..VK_F24
+      }
+    }
+  }
+  Some(match token {
+    "space" => 0x20,           // VK_SPACE
+    "up" => 0x26,               // VK_UP
+    "down" => 0x28,              // VK_DOWN
+    "left" => 0x25,              // VK_LEFT
+    "right" => 0x27,             // VK_RIGHT
+    "escape" | "esc" => 0x1B, // VK_ESCAPE
+    "tab" => 0x09,               // VK_TAB
+    "return" | "enter" => 0x0D, // VK_RETURN
+    "backspace" => 0x08,      // VK_BACK
+    "delete" => 0x2E,           // VK_DELETE
+    _ => return None,
+  })
+}
+
+/// The reverse of `key_name_to_vk` — used only while *capturing* a new
+/// accelerator (see `HotkeyWatcher::start_capture`), to report the key the
+/// user just pressed back to JS in the same token vocabulary
+/// `eventToAccelerator` produces. `None` for a VK with no accelerator
+/// equivalent (mirrors `key_name_to_vk` returning `None` for an unmapped
+/// token) — such a key is simply not reported, same as `eventToAccelerator`
+/// silently ignoring it.
+fn vk_to_key_token(vk: u16) -> Option<String> {
+  if (0x41..=0x5A).contains(&vk) || (0x30..=0x39).contains(&vk) {
+    return Some(((vk as u8) as char).to_string()); // 'A'..'Z' / '0'..'9'
+  }
+  if (0x70..=0x87).contains(&vk) {
+    return Some(format!("F{}", vk - 0x70 + 1)); // VK_F1..VK_F24
+  }
+  Some(
+    match vk {
+      0x20 => "Space",
+      0x26 => "Up",
+      0x28 => "Down",
+      0x25 => "Left",
+      0x27 => "Right",
+      0x1B => "Escape",
+      0x09 => "Tab",
+      0x0D => "Return",
+      0x08 => "Backspace",
+      0x2E => "Delete",
+      0xBC => ",",
+      0xBE => ".",
+      0xBF => "/",
+      0xDC => "\\",
+      0xBA => ";",
+      0xDE => "'",
+      0xDB => "[",
+      0xDD => "]",
+      0xBD => "-",
+      0xBB => "=",
+      0xC0 => "`",
+      _ => return None,
+    }
+    .to_string(),
+  )
+}
+
+/// Builds the same accelerator-string shape `eventToAccelerator`'s non-mac
+/// branch does — `Ctrl`, `Alt`, `Super`, `Shift`, then the key token, in that
+/// order — for reporting a captured combo back to JS.
+fn format_accelerator(mods: Modifiers, key: &str) -> String {
+  let mut parts: Vec<&str> = Vec::with_capacity(5);
+  if mods.ctrl {
+    parts.push("Ctrl");
+  }
+  if mods.alt {
+    parts.push("Alt");
+  }
+  if mods.win {
+    parts.push("Super");
+  }
+  if mods.shift {
+    parts.push("Shift");
+  }
+  parts.push(key);
+  parts.join("+")
+}
+
+/// Mirrors `LONE_SUPER_HOTKEY` in `main/native/hotkeys.ts` / `shortcut.ts`.
+const LONE_SUPER_ACCELERATOR: &str = "Super";
+
+fn keyboard_input(vk: u16, flags: windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS) -> INPUT {
+  INPUT {
+    r#type: INPUT_KEYBOARD,
+    Anonymous: INPUT_0 {
+      ki: KEYBDINPUT {
+        wVk: VIRTUAL_KEY(vk),
+        wScan: 0,
+        dwFlags: flags,
+        time: 0,
+        dwExtraInfo: 0,
+      },
+    },
+  }
+}
+
+/// Injects a "mask key" — a harmless keypress+release — mirroring exactly
+/// what AutoHotkey's `#MenuMaskKey`/`A_MenuMaskKey` does for the identical
+/// problem: "if the system detects only a `Win` (or `Alt`) keydown and keyup
+/// with no intervening keypress, it activates a menu [the Start Menu, or a
+/// focused window's own menu bar]." An intervening keystroke — real or
+/// synthetic — is enough to make that detector stand down.
+///
+/// Needed anywhere this module suppresses something between a real `Win`
+/// keydown and its eventual (real or synthetic) keyup, so Explorer never
+/// sees a "clean" tap:
+///
+///  - A firing lone tap itself, since the real `Win` keyup gets suppressed
+///    (paired with `inject_win_keyup`, see its own doc comment for why both
+///    are needed together — this module shipped a stuck-key bug from having
+///    only that half, and a Start-Menu-still-opens bug from having neither).
+///  - A firing `Win+<key>` combo, since the *other* key's own down/up get
+///    suppressed entirely so it never reaches whatever app is focused —
+///    meaning Explorer never sees anything happen between `Win` going down
+///    and its real (never suppressed, for a combo) eventual keyup either,
+///    so without this it still reads as a clean lone tap and opens the
+///    Start Menu regardless of the combo firing correctly.
+///
+/// `0xFF` is Microsoft's own "no mapping" placeholder virtual-key code —
+/// documented to mean *no key at all*, so nothing anywhere is bound to it.
+/// `0x07` (this module's very first attempt) looks similarly "undefined" but
+/// isn't safe anymore: Windows 10 1909 repurposed it to open the Xbox Game
+/// Bar, which is presumably why that attempt didn't reliably suppress the
+/// Start Menu either.
+///
+/// `LLKHF_INJECTED` (checked at the top of `low_level_keyboard_proc`, the
+/// same convention this module's own capture/matching logic relies on to
+/// ignore its own injected input) is what stops this from being mistaken —
+/// by our own hook, or the desktop's own Start-Menu detector — for a real
+/// keystroke.
+fn inject_mask_keypress() {
+  const VK_NO_MAPPING: u16 = 0xFF;
+  let inputs = [
+    keyboard_input(VK_NO_MAPPING, Default::default()),
+    keyboard_input(VK_NO_MAPPING, KEYEVENTF_KEYUP),
+  ];
+  unsafe {
+    SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+  }
+}
+
+/// Injects a synthetic keyup for `Win` itself (`side`'s own `VK_LWIN`/
+/// `VK_RWIN`) — only ever needed right after `inject_mask_keypress`, for a
+/// firing lone tap specifically (where the *real* `Win` keyup itself is what
+/// gets suppressed, unlike a combo, where `Win`'s own keyup is never touched
+/// — see the `win_side` branch of `handle_key_event`).
+///
+/// Suppressing the real `Win` keyup without this leaves Windows' own "is
+/// `Win` currently held" key-state stuck "down" forever, since nothing ever
+/// told it `Win` came back up — every following keystroke then reads as
+/// `Win+<key>` until the user taps `Win` again (this module's second bug).
+/// Sending this *after* the mask key (rather than before, or as the only
+/// injected event, this module's third bug) matters: by the time this
+/// reaches Explorer's detector, it has already stood down because of the
+/// mask key, so a second `Win` keyup here doesn't re-arm it.
+fn inject_win_keyup(side: WinSide) {
+  let win_vk = match side {
+    WinSide::Left => 0x5B,  // VK_LWIN
+    WinSide::Right => 0x5C, // VK_RWIN
+  };
+  unsafe {
+    SendInput(
+      &[keyboard_input(win_vk, KEYEVENTF_KEYUP)],
+      std::mem::size_of::<INPUT>() as i32,
+    );
+  }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Modifiers {
+  ctrl: bool,
+  alt: bool,
+  shift: bool,
+  win: bool,
+}
+
+/// A parsed accelerator: a modifier set plus an optional non-modifier key.
+/// `key: None` with `win: true` and nothing else is the lone-`Win`-tap case
+/// (`LONE_SUPER_HOTKEY` on the TS side); no other modifier-only combination is
+/// reachable from the capture UI.
+struct ParsedAccelerator {
+  mods: Modifiers,
+  key: Option<u16>,
+}
+
+/// Parses the same accelerator vocabulary `eventToAccelerator`/`matchesShortcut`
+/// (`shortcut.ts`) produce/accept — `Ctrl`/`Control`, `Alt`/`Option`, `Shift`,
+/// `Super`/`Meta`/`Command`/`Cmd`, `CommandOrControl`/`CmdOrCtrl` (-> Ctrl on
+/// Windows) plus one key token. Returns `None` for an unmapped key token or a
+/// bare key with no modifier at all (never valid as a global shortcut).
+fn parse_accelerator(accelerator: &str) -> Option<ParsedAccelerator> {
+  let mut mods = Modifiers::default();
+  let mut key: Option<u16> = None;
+  for token in accelerator.split('+').filter(|t| !t.is_empty()) {
+    match token.to_lowercase().as_str() {
+      "commandorcontrol" | "cmdorctrl" | "control" | "ctrl" => mods.ctrl = true,
+      "command" | "cmd" | "meta" | "super" => mods.win = true,
+      "alt" | "option" => mods.alt = true,
+      "shift" => mods.shift = true,
+      other => key = Some(key_name_to_vk(other)?),
+    }
+  }
+  if !mods.ctrl && !mods.alt && !mods.shift && !mods.win {
+    return None;
+  }
+  Some(ParsedAccelerator { mods, key })
+}
+
+struct HotkeyEntry {
+  id: String,
+  parsed: ParsedAccelerator,
+}
+
+/// Live state the hook proc reads/updates on every keystroke. A single
+/// process-wide instance — `start_hotkey_watcher` only ever runs once (one
+/// `HotkeyWatcher` per app, same as `ClipboardWatcher`) — behind a `Mutex`
+/// since the hook thread and whichever thread calls `register`/`unregister`
+/// (the JS/napi thread) both touch it.
+#[derive(Default)]
+struct HookState {
+  entries: Vec<HotkeyEntry>,
+  ctrl: bool,
+  alt: bool,
+  shift: bool,
+  win_left: bool,
+  win_right: bool,
+  /// Set on a `Win` keydown that hasn't yet seen another key while held; a
+  /// matching keyup with this still set is a solo tap. Cleared by any other
+  /// key event (modifier or not) — that's what tells `Win+Space` apart from a
+  /// tap.
+  win_tap_candidate: Option<WinSide>,
+  /// The non-modifier VK a combo last fired for, so its own key-repeat
+  /// keydowns and its eventual keyup stay suppressed too (rather than only
+  /// the first keydown), without re-firing the callback.
+  fired_vk: Option<u16>,
+  /// Set by `HotkeyWatcher::start_capture`/`stop_capture`. While true, a
+  /// `Win`-involving keystroke is reported to `capture_callback` instead of
+  /// checked against `entries` (see `handle_key_event`) — used by the
+  /// shortcut-recorder UI, which otherwise can never observe a lone `Win` tap
+  /// or a `Win+<key>` combo at all: Explorer/the shell consumes those before
+  /// a normal (non-hooked) focused window ever receives them, the same
+  /// problem `RegisterHotKey` has for *registering* one. A key that doesn't
+  /// involve `Win` is left completely alone here — the existing DOM-level
+  /// capture in the renderer already handles those fine.
+  capturing: bool,
+}
+
+fn hook_state() -> &'static Mutex<HookState> {
+  static STATE: OnceLock<Mutex<HookState>> = OnceLock::new();
+  STATE.get_or_init(|| Mutex::new(HookState::default()))
+}
+
+fn hook_callback() -> &'static Mutex<Option<ThreadsafeFunction<String>>> {
+  static CALLBACK: OnceLock<Mutex<Option<ThreadsafeFunction<String>>>> = OnceLock::new();
+  CALLBACK.get_or_init(|| Mutex::new(None))
+}
+
+fn fire_hotkey(id: &str) {
+  if let Some(tsfn) = hook_callback().lock().unwrap().as_ref() {
+    tsfn.call(Ok(id.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+  }
+}
+
+fn capture_callback() -> &'static Mutex<Option<ThreadsafeFunction<String>>> {
+  static CALLBACK: OnceLock<Mutex<Option<ThreadsafeFunction<String>>>> = OnceLock::new();
+  CALLBACK.get_or_init(|| Mutex::new(None))
+}
+
+fn report_capture(accelerator: &str) {
+  if let Some(tsfn) = capture_callback().lock().unwrap().as_ref() {
+    tsfn.call(
+      Ok(accelerator.to_string()),
+      ThreadsafeFunctionCallMode::NonBlocking,
+    );
+  }
+}
+
+/// Returns whether this keystroke should be suppressed (kept from reaching
+/// Explorer/any other app). Runs on the hook thread, inside the low-level
+/// hook's timeout budget, so this only ever does `O(entries)` comparisons and
+/// a non-blocking callback post — never anything that can block.
+fn handle_key_event(vk: u16, is_down: bool) -> bool {
+  let mut state = hook_state().lock().unwrap();
+
+  if let Some(side) = win_side(vk) {
+    let already_down = match side {
+      WinSide::Left => state.win_left,
+      WinSide::Right => state.win_right,
+    };
+    if is_down {
+      // Ignore key-repeat (the side is already down) — only a fresh press
+      // starts a new tap candidacy.
+      if !already_down {
+        state.win_tap_candidate = Some(side);
+      }
+      match side {
+        WinSide::Left => state.win_left = true,
+        WinSide::Right => state.win_right = true,
+      }
+      return false;
+    }
+    match side {
+      WinSide::Left => state.win_left = false,
+      WinSide::Right => state.win_right = false,
+    }
+    let was_candidate = state.win_tap_candidate == Some(side);
+    state.win_tap_candidate = None;
+    if !was_candidate {
+      return false;
+    }
+    if state.capturing {
+      drop(state);
+      inject_mask_keypress();
+      inject_win_keyup(side);
+      report_capture(LONE_SUPER_ACCELERATOR);
+      return true;
+    }
+    let matched = state
+      .entries
+      .iter()
+      .find(|e| e.parsed.key.is_none() && e.parsed.mods == (Modifiers { win: true, ..Default::default() }))
+      .map(|e| e.id.clone());
+    drop(state);
+    match matched {
+      Some(id) => {
+        inject_mask_keypress();
+        inject_win_keyup(side);
+        fire_hotkey(&id);
+        true
+      }
+      None => false,
+    }
+  } else if is_ctrl_vk(vk) {
+    state.ctrl = is_down;
+    state.win_tap_candidate = None;
+    false
+  } else if is_alt_vk(vk) {
+    state.alt = is_down;
+    state.win_tap_candidate = None;
+    false
+  } else if is_shift_vk(vk) {
+    state.shift = is_down;
+    state.win_tap_candidate = None;
+    false
+  } else {
+    // Any other key cancels a live Win-tap candidacy — this is what lets
+    // `Win+Space` fall through to the combo branch below instead of also
+    // counting as (or interfering with) a lone Win tap.
+    state.win_tap_candidate = None;
+    let win = state.win_left || state.win_right;
+
+    if is_down {
+      if state.fired_vk == Some(vk) {
+        return true; // key-repeat of an already-fired/-captured combo's key
+      }
+      let mods = Modifiers {
+        ctrl: state.ctrl,
+        alt: state.alt,
+        shift: state.shift,
+        win,
+      };
+
+      if state.capturing {
+        // Not `Win`-involving — the renderer's own DOM keydown listener
+        // already sees this one fine (Explorer never intercepts a plain
+        // Ctrl/Alt/Shift combo before delivery), so leave it alone entirely
+        // rather than duplicate that path.
+        if !win {
+          return false;
+        }
+        let Some(token) = vk_to_key_token(vk) else {
+          return false;
+        };
+        state.fired_vk = Some(vk);
+        drop(state);
+        // Suppressing this key (below) means Explorer never sees anything
+        // happen between `Win` going down and its own eventual real keyup —
+        // without this, it still reads as a clean lone tap and opens the
+        // Start Menu regardless (see `inject_mask_keypress`'s doc comment).
+        inject_mask_keypress();
+        report_capture(&format_accelerator(mods, &token));
+        return true;
+      }
+
+      let matched = state
+        .entries
+        .iter()
+        .find(|e| e.parsed.key == Some(vk) && e.parsed.mods == mods)
+        .map(|e| e.id.clone());
+      match matched {
+        Some(id) => {
+          state.fired_vk = Some(vk);
+          drop(state);
+          // Same reasoning as the `capturing` branch above — this key gets
+          // suppressed too, so `Win`'s eventual real keyup needs the same
+          // mask key to not read as a clean lone tap.
+          if win {
+            inject_mask_keypress();
+          }
+          fire_hotkey(&id);
+          true
+        }
+        None => false,
+      }
+    } else if state.fired_vk == Some(vk) {
+      state.fired_vk = None;
+      true // suppress the matching keyup too, so the key doesn't leak to whatever has focus
+    } else {
+      false
+    }
+  }
+}
+
+unsafe extern "system" fn low_level_keyboard_proc(
+  code: i32,
+  wparam: WPARAM,
+  lparam: LPARAM
+) -> LRESULT {
+  if code >= 0 {
+    let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+    // Ignore synthetic input (our own or another tool's `SendInput`) so this
+    // never reacts to injected keystrokes, only what the user actually typed.
+    if info.flags.0 & LLKHF_INJECTED.0 == 0 {
+      let msg = wparam.0 as u32;
+      let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+      let is_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
+      if (is_down || is_up) && handle_key_event(info.vkCode as u16, is_down) {
+        return LRESULT(1);
+      }
+    }
+  }
+  unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// Stashed behind the hotkey watcher window's `GWLP_USERDATA` slot, mirroring
+/// `WatcherContext` above — just the hook handle, so `WM_CLOSE` can unhook it.
+struct HotkeyWindowContext {
+  hook: HHOOK,
+}
+
+unsafe extern "system" fn hotkey_watcher_wndproc(
+  hwnd: HWND,
+  msg: u32,
+  wparam: WPARAM,
+  lparam: LPARAM
+) -> LRESULT {
+  match msg {
+    WM_CLOSE => {
+      unsafe {
+        let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut HotkeyWindowContext;
+        if !ptr.is_null() {
+          SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+          let ctx = Box::from_raw(ptr);
+          let _ = UnhookWindowsHookEx(ctx.hook);
+        }
+        let _ = DestroyWindow(hwnd);
+      }
+      {
+        let mut state = hook_state().lock().unwrap();
+        state.entries.clear();
+        state.capturing = false;
+      }
+      *hook_callback().lock().unwrap() = None;
+      *capture_callback().lock().unwrap() = None;
+      LRESULT(0)
+    }
+    WM_DESTROY => {
+      unsafe { PostQuitMessage(0) };
+      LRESULT(0)
+    }
+    _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+  }
+}
+
+/// Handle for the background hotkey watcher `start_hotkey_watcher` starts.
+/// Dropping this without calling `stop()` leaks the watcher window, the
+/// keyboard hook, and its message-loop thread for the rest of the process's
+/// life — callers must `stop()` it explicitly (e.g. on app quit).
+#[napi]
+pub struct HotkeyWatcher {
+  hwnd: isize,
+  thread: Option<std::thread::JoinHandle<()>>
+}
+
+#[napi]
+impl HotkeyWatcher {
+  /// Parses and stores `accelerator` under `id`, replacing whatever was
+  /// previously registered under that id. Returns `false` if `accelerator`
+  /// doesn't parse (an unmapped key token, or no modifier at all), or if a
+  /// *different* id already holds the exact same modifiers+key — unlike
+  /// `RegisterHotKey`, this never asks Windows for exclusive ownership of the
+  /// combo (it just watches, and on a match suppresses, every keystroke
+  /// itself), so nothing upstream would ever reject a genuine duplicate on
+  /// its own: without this check, `entries` would happily hold two ids for
+  /// the same combo, and whichever happened to land first in the list would
+  /// silently keep winning every match in `handle_key_event` forever, while
+  /// the *other* id's `register()` call reported success anyway.
+  #[napi]
+  pub fn register(&self, id: String, accelerator: String) -> bool {
+    let Some(parsed) = parse_accelerator(&accelerator) else {
+      return false;
+    };
+    let mut state = hook_state().lock().unwrap();
+    let held_by_another = state
+      .entries
+      .iter()
+      .any(|e| e.id != id && e.parsed.mods == parsed.mods && e.parsed.key == parsed.key);
+    if held_by_another {
+      return false;
+    }
+    state.entries.retain(|e| e.id != id);
+    state.entries.push(HotkeyEntry { id, parsed });
+    true
+  }
+
+  /// Idempotent — removing an id that isn't registered is a no-op.
+  #[napi]
+  pub fn unregister(&self, id: String) {
+    hook_state().lock().unwrap().entries.retain(|e| e.id != id);
+  }
+
+  /// Starts reporting every `Win`-involving keystroke to `callback` as a
+  /// captured accelerator string (`"Super"` for a lone tap, `"Super+Space"`
+  /// for a combo, …) instead of matching it against registered entries —
+  /// for a shortcut-recorder UI, which otherwise has no way to see a `Win`
+  /// keystroke at all (see `HookState::capturing`). A key that doesn't
+  /// involve `Win` is untouched and keeps reaching the focused window's own
+  /// keydown handler exactly as before. Replaces any previous capture
+  /// callback if already capturing.
+  #[napi]
+  pub fn start_capture(&self, callback: ThreadsafeFunction<String>) {
+    *capture_callback().lock().unwrap() = Some(callback);
+    let mut state = hook_state().lock().unwrap();
+    state.capturing = true;
+    state.win_tap_candidate = None;
+    state.fired_vk = None;
+  }
+
+  /// Stops capture mode and resumes normal entry-matching. Idempotent.
+  #[napi]
+  pub fn stop_capture(&self) {
+    let mut state = hook_state().lock().unwrap();
+    state.capturing = false;
+    state.win_tap_candidate = None;
+    state.fired_vk = None;
+    *capture_callback().lock().unwrap() = None;
+  }
+
+  /// Unhooks, closes the hidden watcher window, and joins its message-loop
+  /// thread. Idempotent.
+  #[napi]
+  pub fn stop(&mut self) {
+    if self.hwnd != 0 {
+      let hwnd = HWND(self.hwnd as *mut core::ffi::c_void);
+      unsafe {
+        let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+      }
+      self.hwnd = 0;
+    }
+    if let Some(thread) = self.thread.take() {
+      let _ = thread.join();
+    }
+  }
+}
+
+/// Starts the global-hotkey watcher: a background thread creates a hidden,
+/// message-only window, installs a system-wide `WH_KEYBOARD_LL` hook on that
+/// thread (required — Windows delivers low-level hook callbacks only to the
+/// thread that installed them, via its message loop), and invokes `callback`
+/// with the registered id whenever a bound accelerator fires. Entries are
+/// registered/unregistered afterward via the returned `HotkeyWatcher`.
+///
+/// Blocks briefly (microseconds — one window + hook creation) waiting for the
+/// background thread to finish setting up, so a failure can be reported by
+/// returning a watcher whose `hwnd` is already 0 rather than one that
+/// silently never calls back — same contract as `start_clipboard_watcher`.
+#[napi]
+pub fn start_hotkey_watcher(callback: ThreadsafeFunction<String>) -> HotkeyWatcher {
+  *hook_callback().lock().unwrap() = Some(callback);
+  hook_state().lock().unwrap().entries.clear();
+
+  let (tx, rx) = std::sync::mpsc::channel::<isize>();
+
+  let thread = std::thread::spawn(move || {
+    let hinstance = unsafe {
+      match GetModuleHandleW(None) {
+        Ok(h) => windows::Win32::Foundation::HINSTANCE::from(h),
+        Err(_) => {
+          let _ = tx.send(0);
+          return;
+        }
+      }
+    };
+
+    let class_name = HSTRING::from("MagibarHotkeyWatcherClass");
+    static CLASS_REGISTERED: std::sync::Once = std::sync::Once::new();
+    CLASS_REGISTERED.call_once(|| unsafe {
+      let wc = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        lpfnWndProc: Some(hotkey_watcher_wndproc),
+        hInstance: hinstance,
+        lpszClassName: PCWSTR(class_name.as_ptr()),
+        ..Default::default()
+      };
+      RegisterClassExW(&wc);
+    });
+
+    let hwnd = unsafe {
+      CreateWindowExW(
+        WINDOW_EX_STYLE(0),
+        &class_name,
+        &HSTRING::from(""),
+        WINDOW_STYLE(0),
+        0,
+        0,
+        0,
+        0,
+        Some(HWND_MESSAGE),
+        None,
+        Some(hinstance),
+        None
+      )
+    };
+    let hwnd = match hwnd {
+      Ok(h) => h,
+      Err(_) => {
+        let _ = tx.send(0);
+        return;
+      }
+    };
+
+    // `hMod` is `None`/NULL for a *_LL hook per MSDN: the hook procedure lives
+    // in this same process, and `dwThreadId` is always 0 for a low-level hook
+    // (Windows treats it as global regardless of what's passed).
+    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0) };
+    let hook = match hook {
+      Ok(h) => h,
+      Err(_) => {
+        unsafe {
+          let _ = DestroyWindow(hwnd);
+        }
+        let _ = tx.send(0);
+        return;
+      }
+    };
+
+    let ctx = Box::new(HotkeyWindowContext { hook });
+    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize) };
+
+    let _ = tx.send(hwnd.0 as isize);
+
+    let mut msg = MSG::default();
+    unsafe {
+      while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        let _ = TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+      }
+    }
+  });
+
+  let hwnd = rx.recv().unwrap_or(0);
+  HotkeyWatcher {
+    hwnd,
+    thread: Some(thread)
+  }
 }

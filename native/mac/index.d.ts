@@ -2,6 +2,51 @@
 /* eslint-disable */
 
 /**
+ * Handle for the background hotkey watcher `start_hotkey_watcher` starts.
+ * Dropping this without calling `stop()` leaks the event tap and its
+ * run-loop thread for the rest of the process's life — callers must
+ * `stop()` it explicitly (e.g. on app quit), mirroring `native/win`'s
+ * `HotkeyWatcher`.
+ */
+export declare class HotkeyWatcher {
+  /**
+   * Parses and stores `accelerator` under `id`, replacing whatever was
+   * previously registered under that id. Returns `false` if `accelerator`
+   * doesn't parse, or if a *different* id already holds the exact same
+   * modifiers+key — unlike `globalShortcut`, this never asks macOS for
+   * exclusive ownership of the combo (it just watches, and on a match
+   * suppresses, every keystroke itself), so nothing upstream would ever
+   * reject a genuine duplicate on its own: without this check, `entries`
+   * would happily hold two ids for the same combo, and whichever happened
+   * to land first in the list would silently keep winning every match in
+   * `handle_key_event`/`handle_flags_changed` forever, while the *other*
+   * id's `register()` call reported success anyway.
+   */
+  register(id: string, accelerator: string): boolean
+  /** Idempotent — removing an id that isn't registered is a no-op. */
+  unregister(id: string): void
+  /**
+   * Starts reporting every reportable keystroke (any `mods+key` press, or a
+   * modifier-only chord's release) to `callback` as a captured accelerator
+   * string, instead of matching it against registered entries — see
+   * `HookState::capturing`'s doc comment for why a shortcut recorder needs
+   * this rather than its own DOM listener: an already-bound combo would
+   * otherwise never reach this process at all. A keystroke with no modifier
+   * held is untouched and keeps reaching the focused window's own keydown
+   * handler exactly as before (Escape-to-cancel, Enter-to-confirm, …).
+   * Replaces any previous capture callback if already capturing.
+   */
+  startCapture(callback: ((err: Error | null, arg: string) => any)): void
+  /** Stops capture mode and resumes normal entry-matching. Idempotent. */
+  stopCapture(): void
+  /**
+   * Disables and invalidates the tap, stops its run loop, and joins the
+   * background thread. Idempotent.
+   */
+  stop(): void
+}
+
+/**
  * Moves and resizes the focused window to `rect`. Sets size, then position, then
  * size again — some apps clamp or reflow their frame when it lands near a screen
  * edge, and re-asserting the size after the move is what makes the final result
@@ -144,6 +189,22 @@ export interface NativeProcess {
  * bridging crate to enforce it for us here.
  */
 export declare function pasteboardChangeCount(): number
+
+/**
+ * Starts the global-hotkey watcher: a background thread installs a
+ * session-level `CGEventTap` (requires the user to have granted Magibar
+ * Input Monitoring access — see the module doc comment) and runs a
+ * `CFRunLoop` to keep receiving callbacks on it, invoking `callback` with
+ * the registered id whenever a bound accelerator fires. Entries are
+ * registered/unregistered afterward via the returned `HotkeyWatcher`.
+ *
+ * Blocks briefly waiting for the background thread to finish setting up, so
+ * a failure (permission not granted, or run-loop-source creation failing)
+ * can be reported by returning a watcher whose `tap` is already 0 rather
+ * than one that silently never calls back — same contract as
+ * `native/win`'s `start_hotkey_watcher`.
+ */
+export declare function startHotkeyWatcher(callback: ((err: Error | null, arg: string) => any)): HotkeyWatcher
 
 /**
  * Toggles native macOS fullscreen on the focused window — the same effect as

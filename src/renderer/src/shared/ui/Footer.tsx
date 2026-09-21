@@ -10,9 +10,9 @@ import {
 } from "react";
 import { Autocomplete } from "@base-ui/react/autocomplete";
 import { cn } from "cnfast";
-import { formatShortcut } from "@renderer/lib/shortcut";
 import { useShortcut } from "@renderer/lib/use-shortcut";
 import { iconSrc } from "@renderer/lib/icon";
+import { ShortcutLabel } from "./ShortcutLabel";
 
 /** A key-combo pill (e.g. ⌘⏎ / Ctrl+Enter). Decorative — hidden from a11y. */
 function Kbd({
@@ -30,7 +30,7 @@ function Kbd({
         className,
       )}
     >
-      {formatShortcut(accelerator)}
+      <ShortcutLabel accelerator={accelerator} />
     </kbd>
   );
 }

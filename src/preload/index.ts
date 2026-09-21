@@ -46,6 +46,23 @@ const api = {
     get: (): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.hotkeyGet),
     set: (accelerator: string): Promise<HotkeySetResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.hotkeySet, accelerator),
+    /**
+     * Shared by every shortcut-recorder UI, not just this row — see the
+     * `hotkeyCapture*` doc comment in `shared/types.ts`. A recorder calls
+     * `captureStart()` on entering recording mode and `captureStop()` on
+     * leaving it (confirmed, cancelled, or unmounted), and subscribes via
+     * `onCaptured` for the `Win`-involving accelerators it wouldn't
+     * otherwise see through its own `keydown` listener.
+     */
+    captureStart: (): void => ipcRenderer.send(IPC_CHANNELS.hotkeyCaptureStart),
+    captureStop: (): void => ipcRenderer.send(IPC_CHANNELS.hotkeyCaptureStop),
+    onCaptured: (cb: (accelerator: string) => void): (() => void) => {
+      const listener = (_: unknown, accelerator: string): void =>
+        cb(accelerator);
+      ipcRenderer.on(IPC_CHANNELS.hotkeyCaptured, listener);
+      return () =>
+        ipcRenderer.removeListener(IPC_CHANNELS.hotkeyCaptured, listener);
+    },
   },
 
   /** Launcher: a deferred-subtitle row rendered (or force-refreshed) — resolves with the fresh subtitle. */

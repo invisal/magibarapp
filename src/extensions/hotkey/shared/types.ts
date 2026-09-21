@@ -17,6 +17,15 @@ export interface ActionHotkeySetResult {
   success: boolean;
   /** The binding actually in effect for this action after the call, or `null` if none. */
   binding: ActionHotkeyBinding | null;
+  /**
+   * Only set when `success` is `false`: why. `"toggle"` — the accelerator is
+   * the app's own toggle shortcut, which `set` never reassigns even with
+   * `force` (that's a separate, Settings-owned binding — silently stealing
+   * it here would leave the user unable to reopen the launcher by keyboard).
+   * `"conflict"` — some other action already holds it; retry with `force:
+   * true` to reassign it away from that action instead.
+   */
+  reason?: "toggle" | "conflict";
 }
 
 export const HOTKEY_CHANNELS = {

@@ -700,6 +700,7 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.ClipboardWatcher = nativeBinding.ClipboardWatcher
+module.exports.HotkeyWatcher = nativeBinding.HotkeyWatcher
 module.exports.applyWindowRect = nativeBinding.applyWindowRect
 module.exports.extractIconPng = nativeBinding.extractIconPng
 module.exports.extractPackagedIconPng = nativeBinding.extractPackagedIconPng
@@ -711,4 +712,5 @@ module.exports.listProcesses = nativeBinding.listProcesses
 module.exports.listStartApps = nativeBinding.listStartApps
 module.exports.resolveShortcut = nativeBinding.resolveShortcut
 module.exports.startClipboardWatcher = nativeBinding.startClipboardWatcher
+module.exports.startHotkeyWatcher = nativeBinding.startHotkeyWatcher
 module.exports.toggleMaximize = nativeBinding.toggleMaximize
