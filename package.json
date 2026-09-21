@@ -52,7 +52,6 @@
     "@codemirror/view": "^6.43.10",
     "@napi-rs/cli": "^3.8.6",
     "@tailwindcss/postcss": "^4.3.3",
-    "@tanstack/react-virtual": "^3.14.10",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "@typescript/vfs": "^1.6.1",

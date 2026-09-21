@@ -71,14 +71,6 @@ interface CalculatorPanelProps extends ComponentPropsWithRef<"div"> {
 }
 
 /**
- * Starting estimate for the virtualized list's row height (see App.tsx) —
- * this row's *actual* height is measured after render and can grow past it
- * (a long `value` wraps onto more than one line), so this is only ever a
- * first guess, never an enforced cap.
- */
-export const CALCULATOR_PANEL_HEIGHT = 146;
-
-/**
  * The first row of the result list whenever a query resolves to a `Calculation`.
  * Labelled Expression / Result fields split by a rule; both values are selectable
  * so they can be copied by hand. A `footnote` (currency's "Updated 2 days ago")
