@@ -376,10 +376,30 @@ app.whenReady().then(() => {
       actionId: string,
       accelerator: string,
       type: ActionHotkeyBinding["type"],
+      force?: boolean,
     ): ActionHotkeySetResult => {
       const previous = actionHotkeys.get(actionId);
       if (accelerator === previous?.accelerator) {
         return { success: true, binding: previous ?? null };
+      }
+
+      // The toggle shortcut lives in `settings`, not `actionHotkeys` — never
+      // reassign it here even with `force`, since silently stealing it would
+      // leave the user unable to reopen the launcher by keyboard, with no
+      // obvious way back short of Settings.
+      if (accelerator === settings.getHotkey()) {
+        return { success: false, binding: previous ?? null, reason: "toggle" };
+      }
+
+      const conflictingId = Object.entries(actionHotkeys.list()).find(
+        ([id, binding]) => id !== actionId && binding.accelerator === accelerator,
+      )?.[0];
+      if (conflictingId) {
+        if (!force) {
+          return { success: false, binding: previous ?? null, reason: "conflict" };
+        }
+        unregisterHotkey(conflictingId);
+        actionHotkeys.remove(conflictingId);
       }
 
       // `registerActionHotkey` replaces whatever was previously registered

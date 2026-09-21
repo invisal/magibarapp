@@ -68,7 +68,9 @@ function HotkeyRow() {
     // through `eventToAccelerator` — it only ever sees the keydown, and a
     // lone modifier has no accelerator-equivalent "key". Detecting that
     // needs the keyup too, tracked separately.
-    const tapTracker = createLoneSuperTapTracker();
+    const tapTracker = createLoneSuperTapTracker(
+      window.api.platform === "win32" || window.api.platform === "darwin",
+    );
 
     function onKeyDown(e: KeyboardEvent): void {
       e.preventDefault();
@@ -109,14 +111,19 @@ function HotkeyRow() {
     window.addEventListener("keyup", onKeyUp, true);
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    // `Win`-involving keystrokes (a lone tap, or `Win+<key>`) never reach the
-    // listeners above at all — the OS intercepts them before a plain
-    // focused window sees them, the same problem `RegisterHotKey` has for
-    // *registering* one. Native forwarding covers exactly that gap; a key
-    // that doesn't involve `Win` never comes through this channel, only the
-    // ones above, so there's no double-apply between the two paths.
+    // `Win`/`Cmd`-involving keystrokes (a lone tap, or a `mods+key` combo)
+    // never reach the listeners above at all — the OS intercepts them before
+    // a plain focused window sees them, the same problem `RegisterHotKey`
+    // has for *registering* one. Native forwarding covers exactly that gap.
+    // `tapTracker.cancel()` on every native report matters even though the
+    // *reported* keystroke itself never reaches `onKeyDown`/`onKeyUp` above —
+    // see `createLoneSuperTapTracker`'s doc comment: a suppressed `T` inside
+    // `Command+T` never clears `tapTracker`'s solo-tap candidacy the normal
+    // way, and `Command`'s own un-suppressed keyup would otherwise misread
+    // the hold as a clean tap and clobber this.
     window.api.hotkey.captureStart();
     const unsubscribe = window.api.hotkey.onCaptured((accelerator) => {
+      tapTracker.cancel();
       void applyHotkey(accelerator);
     });
 

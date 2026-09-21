@@ -216,21 +216,48 @@ export const LONE_SUPER_HOTKEY = "Super";
  * released with no other key in between), `null` otherwise. Only Meta/Super
  * has this native-side support today — a bare Ctrl/Alt/Shift tap isn't
  * offered, so this doesn't track those.
+ *
+ * `supported` should be `true` only on platforms whose native hotkey engine
+ * (`main/native/hotkeys.ts`) can actually register a modifier-only
+ * accelerator — Windows (`@magibar/win`'s `WH_KEYBOARD_LL` hook) and mac
+ * (`@magibar/mac`'s `CGEventTap`), i.e. `window.api.platform === "win32" ||
+ * "darwin"`. Everywhere else (Linux, or either platform if its native addon
+ * fails to load) falls back to `globalShortcut`, which has no way to
+ * register a modifier-only accelerator at all — without gating this, the
+ * tracker would still report {@link LONE_SUPER_HOTKEY} back to a recorder
+ * there, surfacing as a confusing "already in use" error for a combo nothing
+ * else is actually using.
+ *
+ * A caller wired to `window.api.hotkey.onCaptured` (both platforms above
+ * route a `mods+key` combo through that native channel, since the OS
+ * swallows it before this window's own keydown listener ever sees it) must
+ * call {@link cancel} whenever that channel reports *anything* mid-hold.
+ * Without it: pressing `Command+T` suppresses `T`'s keydown/keyup entirely
+ * (never reaching `onKeyDown` here to clear `candidate`), but the native
+ * side deliberately leaves `Command`'s own *eventual* keyup un-suppressed —
+ * so this tracker sees only "Meta down … Meta up" and misreads it as a
+ * clean solo tap, overwriting the just-reported `"Command+T"` with
+ * {@link LONE_SUPER_HOTKEY} the instant the user lets go of Cmd.
  */
-export function createLoneSuperTapTracker(): {
+export function createLoneSuperTapTracker(supported: boolean): {
   onKeyDown: (event: KeyboardEvent) => void;
   onKeyUp: (event: KeyboardEvent) => string | null;
+  cancel: () => void;
 } {
   let candidate = false;
   return {
     onKeyDown(event) {
-      if (event.repeat) return;
+      if (!supported || event.repeat) return;
       candidate = event.key === "Meta";
     },
     onKeyUp(event) {
+      if (!supported) return null;
       const wasCandidate = candidate && event.key === "Meta";
       candidate = false;
       return wasCandidate ? LONE_SUPER_HOTKEY : null;
+    },
+    cancel() {
+      candidate = false;
     },
   };
 }
