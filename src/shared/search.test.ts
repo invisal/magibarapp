@@ -164,13 +164,117 @@ test("matchAction: a tag equal to the whole query is a strong match", () => {
   assert.equal(m.score, 20);
 });
 
-test("matchAction: a tag matching one word of a longer query is only a weak nudge", () => {
-  const m = matchAction("work stuff", {
+test("matchAction: every word must match (AND) — a tag alone doesn't carry a longer query", () => {
+  assert.equal(
+    matchAction("work stuff", { title: "Internal Dashboard", tags: ["work"] })
+      .match,
+    false,
+  );
+  const m = matchAction("work dash", {
     title: "Internal Dashboard",
     tags: ["work"],
   });
   assert.equal(m.match, true);
-  assert.equal(m.score, 3);
+});
+
+test("matchAction: words match in any order", () => {
+  assert.equal(
+    matchAction("code visual", { title: "Visual Studio Code" }).match,
+    true,
+  );
+  assert.equal(
+    matchAction("studio zzz", { title: "Visual Studio Code" }).match,
+    false,
+  );
+});
+
+// --- matchAction: alternative names -----------------------------------------
+
+test("matchAction: an alt name surfaces the action (Kill Process → Quit Processes)", () => {
+  const action = {
+    title: "Quit Processes",
+    altNames: ["Kill Process", "End Task"],
+  };
+  assert.equal(matchAction("kill", action).match, true);
+  assert.equal(matchAction("kill proc", action).match, true);
+  assert.equal(matchAction("end task", action).match, true);
+  assert.equal(matchAction("zzz", action).match, false);
+});
+
+test("matchAction: an exact alt name scores high, a fuzzy one just under the title", () => {
+  assert.equal(
+    matchAction("vscode", { title: "Visual Studio Code", altNames: ["vscode"] })
+      .score,
+    30,
+  );
+  const viaTitle = matchAction("note", { title: "Notepad" });
+  const viaAlt = matchAction("note", {
+    title: "Editor",
+    altNames: ["Notepad"],
+  });
+  assert.ok(viaAlt.score < viaTitle.score);
+});
+
+test("matchAction: a query word may come from the title and another from an alt name", () => {
+  assert.equal(
+    matchAction("kill quit", {
+      title: "Quit Processes",
+      altNames: ["Kill Process"],
+    }).match,
+    true,
+  );
+});
+
+// --- matchAction: static subtitle -------------------------------------------
+
+test("matchAction: a subtitle word prefix surfaces a row the title misses", () => {
+  const m = matchAction("clipboard", {
+    title: "Paste History",
+    subtitle: "Browse your clipboard history",
+  });
+  assert.equal(m.match, true);
+  assert.equal(m.score, 0.5);
+});
+
+test("matchAction: a subtitle hit ranks below a real title hit", () => {
+  const viaTitle = matchAction("note", { title: "Notepad" });
+  const viaSubtitle = matchAction("note", {
+    title: "Editor",
+    subtitle: "Quick notes",
+  });
+  assert.ok(viaTitle.score > viaSubtitle.score);
+});
+
+test("matchAction: the subtitle is matched strictly, not as a subsequence", () => {
+  // p…d…f is a subsequence of this subtitle but not a word in it.
+  assert.equal(
+    matchAction("pdf", {
+      title: "Zed",
+      subtitle: "Open a project in the editor",
+    }).match,
+    false,
+  );
+});
+
+test("matchAction: a single letter never matches a subtitle", () => {
+  assert.equal(
+    matchAction("q", { title: "Zed", subtitle: "quick editor" }).match,
+    false,
+  );
+});
+
+test("matchAction: a longer word may hit mid-word in the subtitle, weakly", () => {
+  const m = matchAction("board", { title: "Zed", subtitle: "Clipboard tools" });
+  assert.equal(m.match, true);
+  assert.equal(m.score, 0.1);
+});
+
+test("matchAction: title words and subtitle words can split a query", () => {
+  const m = matchAction("chrome work", {
+    title: "Google Chrome",
+    subtitle: "Work profile",
+  });
+  assert.equal(m.match, true);
 });
 
 test("matchAction: tags don't match a partial word", () => {

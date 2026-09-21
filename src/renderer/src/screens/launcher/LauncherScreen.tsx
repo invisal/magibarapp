@@ -5,6 +5,7 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import { VersionStatus } from "./components/VersionStatus";
 import type { OpenWithApp } from "@extensions/quicklink/shared/types";
 import type { ActionHotkeyBinding } from "@extensions/hotkey/shared/types";
 import type { Calculation, LauncherAction } from "../../../../shared/types";
@@ -14,10 +15,8 @@ import {
   type CopyKind,
 } from "@extensions/calculator-history/shared/format";
 import type { FooterMenuItem } from "@renderer/shared/ui";
-import SearchItem, { SEARCH_ITEM_HEIGHT } from "./components/SearchItem";
-import CalculatorPanel, {
-  CALCULATOR_PANEL_HEIGHT,
-} from "./components/CalculatorPanel";
+import SearchItem from "./components/SearchItem";
+import CalculatorPanel from "./components/CalculatorPanel";
 import { buildContextMenu } from "./context-menu/registry";
 import type { ContextMenuContext } from "./context-menu/types";
 import { useLauncherHost } from "./host";
@@ -26,18 +25,6 @@ import { useRouteStack } from "./router/context";
 type Row =
   | { key: string; kind: "calc"; calculation: Calculation }
   | { key: string; kind: "action"; action: LauncherAction };
-
-/**
- * `SearchItem` rows are fixed-height, so they need no measurement — this is
- * only ever their exact, final height. A `"calc"` row's `CALCULATOR_PANEL_HEIGHT`
- * is just the virtualizer's starting estimate: `ListScreen`'s `measureItem`
- * (wired up below, only for that one row kind) corrects it to the panel's
- * real rendered height once a `Calculation`'s `value` wraps onto more than one
- * line — a multi-zone timezone listing, for instance.
- */
-function rowHeight(row: Row): number {
-  return row.kind === "calc" ? CALCULATOR_PANEL_HEIGHT : SEARCH_ITEM_HEIGHT;
-}
 
 /**
  * The launcher's search screen: the query input, the ranked result list, the
@@ -413,6 +400,10 @@ function LauncherScreen() {
     <ListScreen<Row>
       data={rows}
       getId={(row) => row.key}
+      // Main always sends `group`; the calc row is the answer, so it heads "Results".
+      getGroup={(row) =>
+        row.kind === "calc" ? "Results" : (row.action.group ?? "Commands")
+      }
       renderItem={(row, { highlighted }) =>
         row.kind === "calc" ? (
           <CalculatorPanel
@@ -432,9 +423,6 @@ function LauncherScreen() {
           />
         )
       }
-      virtualized
-      itemHeight={rowHeight}
-      measureItem={(row) => row.kind === "calc"}
       serverFiltered
       inputValue={query}
       onInputChange={setQuery}
@@ -472,9 +460,7 @@ function LauncherScreen() {
       menu={buildMenuActions}
       customFooter={
         <>
-          <Footer.Label>
-            {results.length} result{results.length === 1 ? "" : "s"}
-          </Footer.Label>
+          <VersionStatus />
           <Footer.Button
             active={pinned}
             onClick={() => void togglePin()}

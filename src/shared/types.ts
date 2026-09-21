@@ -6,9 +6,37 @@ export type LauncherActionType =
   /** A pinned calculation (Calculator History) — a live value, like a Widget row. */
   | "calculation";
 
+/**
+ * The section a launcher row is listed under. "Results" is what every row
+ * becomes once the user types a query.
+ */
+export type ActionGroup = "Pinned" | "Commands" | "Applications" | "Results";
+
+/** Section order in the empty-query list. "Results" only ever appears alone. */
+export const ACTION_GROUP_ORDER: readonly ActionGroup[] = [
+  "Pinned",
+  "Commands",
+  "Applications",
+  "Results",
+];
+
+/** The group an action lands in when its source doesn't pick one; pinned ones head the list. */
+export function defaultActionGroup(
+  action: Pick<LauncherAction, "type" | "pinned">,
+): ActionGroup {
+  if (action.pinned) return "Pinned";
+  return action.type === "application" ? "Applications" : "Commands";
+}
+
 export interface LauncherAction {
   id: string;
   title: string;
+  /**
+   * Section this row is listed under. A source may set it; `query()` always
+   * fills it in before it crosses IPC (defaulting from `type`, and forcing
+   * "Results" while a query is typed), so the renderer can rely on it.
+   */
+  group?: ActionGroup;
   subtitle?: string;
   /** Emoji, single/few characters, or an image URL (http(s):/data:/file:) */
   icon?: string;
@@ -25,6 +53,13 @@ export interface LauncherAction {
    * placeholder). The launcher offers Tab to capture one into a chip.
    */
   takesArgument?: boolean;
+  /**
+   * Other names this action goes by ("Kill Process" for "Quit Processes"),
+   * searched like a second title but ranked just below the real one. Unlike
+   * `tags` (exact words) these are fuzzy-matched, and unlike `keyword` they
+   * don't take an argument.
+   */
+  altNames?: string[];
   /** Extra terms this action should also match on (e.g. a quicklink's tags). */
   tags?: string[];
   /** Quicklink is pinned — sorts above unpinned actions in the root list. */
@@ -137,7 +172,21 @@ export interface HotkeySetResult {
   hotkey: string;
 }
 
+/** Auto-update state, pushed main -> launcher. */
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "available"; version: string }
+  | { state: "downloading"; version: string; percent: number }
+  | { state: "ready"; version: string }
+  | { state: "error"; message: string };
+
 export const IPC_CHANNELS = {
+  updateGet: "update:get",
+  updateCheck: "update:check",
+  /** Downloads the update, then quits and installs. */
+  updateInstall: "update:install",
+  updateStatus: "update:status",
   query: "launcher:query",
   execute: "launcher:execute",
   hide: "launcher:hide",
@@ -159,4 +208,24 @@ export const IPC_CHANNELS = {
   /** Settings window ↔ main: read / rebind the global toggle shortcut. */
   hotkeyGet: "settings:hotkey-get",
   hotkeySet: "settings:hotkey-set",
+  /**
+   * Shared by every shortcut-recorder UI (the toggle row in Settings, and
+   * `HotkeyPanel`'s per-action "Set Hotkey…" in the launcher window) — not
+   * settings-specific, so no `settings:` prefix. On Windows, `captureStart`
+   * turns on native forwarding of `Win`-involving keystrokes (see
+   * `main/native/hotkeys.ts` / `HotkeyWatcher::start_capture` in
+   * `native/win/src/lib.rs`) for as long as recording is active, since a
+   * lone `Win` tap or a `Win+<key>` combo never reaches a plain focused
+   * window's own keydown handler at all — the same interception problem
+   * `RegisterHotKey` has for *registering* one, just hit during capture
+   * instead. `hotkeyCaptured` is the push channel carrying each captured
+   * accelerator string; a key that doesn't involve `Win` is untouched and
+   * keeps reaching the renderer's own keydown listener exactly as before,
+   * so this is additive, not a replacement for DOM-based capture. A no-op
+   * pair on mac/linux (or if the native addon fails to load) — that capture
+   * path there is unchanged, DOM-only.
+   */
+  hotkeyCaptureStart: "hotkey:capture-start",
+  hotkeyCaptureStop: "hotkey:capture-stop",
+  hotkeyCaptured: "hotkey:captured",
 } as const;

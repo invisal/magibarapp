@@ -2,6 +2,51 @@
 /* eslint-disable */
 
 /**
+ * Handle for the background hotkey watcher `start_hotkey_watcher` starts.
+ * Dropping this without calling `stop()` leaks the event tap and its
+ * run-loop thread for the rest of the process's life — callers must
+ * `stop()` it explicitly (e.g. on app quit), mirroring `native/win`'s
+ * `HotkeyWatcher`.
+ */
+export declare class HotkeyWatcher {
+  /**
+   * Parses and stores `accelerator` under `id`, replacing whatever was
+   * previously registered under that id. Returns `false` if `accelerator`
+   * doesn't parse, or if a *different* id already holds the exact same
+   * modifiers+key — unlike `globalShortcut`, this never asks macOS for
+   * exclusive ownership of the combo (it just watches, and on a match
+   * suppresses, every keystroke itself), so nothing upstream would ever
+   * reject a genuine duplicate on its own: without this check, `entries`
+   * would happily hold two ids for the same combo, and whichever happened
+   * to land first in the list would silently keep winning every match in
+   * `handle_key_event`/`handle_flags_changed` forever, while the *other*
+   * id's `register()` call reported success anyway.
+   */
+  register(id: string, accelerator: string): boolean
+  /** Idempotent — removing an id that isn't registered is a no-op. */
+  unregister(id: string): void
+  /**
+   * Starts reporting every reportable keystroke (any `mods+key` press, or a
+   * modifier-only chord's release) to `callback` as a captured accelerator
+   * string, instead of matching it against registered entries — see
+   * `HookState::capturing`'s doc comment for why a shortcut recorder needs
+   * this rather than its own DOM listener: an already-bound combo would
+   * otherwise never reach this process at all. A keystroke with no modifier
+   * held is untouched and keeps reaching the focused window's own keydown
+   * handler exactly as before (Escape-to-cancel, Enter-to-confirm, …).
+   * Replaces any previous capture callback if already capturing.
+   */
+  startCapture(callback: ((err: Error | null, arg: string) => any)): void
+  /** Stops capture mode and resumes normal entry-matching. Idempotent. */
+  stopCapture(): void
+  /**
+   * Disables and invalidates the tap, stops its run loop, and joins the
+   * background thread. Idempotent.
+   */
+  stop(): void
+}
+
+/**
  * What a form shows. `kind` is `"text"` (a text field) or `"keys"` (records the
  * next key combo, as an Electron accelerator like `Command+Shift+K`).
  */
@@ -63,6 +108,30 @@ export declare function closeActionsForm(): void
 
 /** Dismisses the panel if one is open (reports `{ kind: "close" }`). */
 export declare function closeActionsPanel(): void
+
+/**
+ * On-disk size of each directory (or file) in `paths`, in the same order.
+ * Async — the walk of a multi-gigabyte `DerivedData` runs on the libuv
+ * thread pool, so the Electron main process never blocks on it.
+ */
+export declare function dirSize(paths: Array<string>): Promise<Array<DirSize>>
+
+/** One directory's on-disk footprint, as reported by `dir_size()`. */
+export interface DirSize {
+  path: string
+  /**
+   * Bytes actually allocated on disk (`st_blocks * 512`, what `du` and
+   * Finder's "size on disk" report) — not the sum of logical file lengths,
+   * which overstates sparse files and understates block-rounded small ones.
+   */
+  bytes: number
+  fileCount: number
+  /**
+   * Newest modification time among the directory itself and its direct
+   * children, in epoch milliseconds — cheap "last used" signal for the UI.
+   */
+  modifiedMs: number
+}
 
 /**
  * Tells the open form its save failed: it shows `message` and lets the user
@@ -215,6 +284,22 @@ export declare function showActionsForm(parentView: Buffer, spec: ActionsFormSpe
  * `closeActionsPanel`). Any panel already open is dismissed first.
  */
 export declare function showActionsPanel(parentView: Buffer, title: string, items: ActionsPanelItem[], onEvent: (event: PanelEvent) => void): void
+
+/**
+ * Starts the global-hotkey watcher: a background thread installs a
+ * session-level `CGEventTap` (requires the user to have granted Magibar
+ * Input Monitoring access — see the module doc comment) and runs a
+ * `CFRunLoop` to keep receiving callbacks on it, invoking `callback` with
+ * the registered id whenever a bound accelerator fires. Entries are
+ * registered/unregistered afterward via the returned `HotkeyWatcher`.
+ *
+ * Blocks briefly waiting for the background thread to finish setting up, so
+ * a failure (permission not granted, or run-loop-source creation failing)
+ * can be reported by returning a watcher whose `tap` is already 0 rather
+ * than one that silently never calls back — same contract as
+ * `native/win`'s `start_hotkey_watcher`.
+ */
+export declare function startHotkeyWatcher(callback: ((err: Error | null, arg: string) => any)): HotkeyWatcher
 
 /**
  * Toggles native macOS fullscreen on the focused window — the same effect as

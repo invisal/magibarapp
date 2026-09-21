@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ListScreen, LIST_SCREEN_ITEM_HEIGHT } from "@renderer/shared/ui";
+import { ListScreen } from "@renderer/shared/ui";
 import type { FooterMenuItem } from "@renderer/shared/ui";
 import {
   absoluteTime,
@@ -10,49 +10,13 @@ import {
 } from "../shared/format";
 import type { ClipboardEntry } from "../shared/types";
 
-/** A section heading (`"Pinned"`/`"Today"`/…) inlined into the row list. */
-interface HeaderRow {
-  kind: "header";
-  key: string;
-  label: string;
-}
-
-interface EntryRow {
-  kind: "entry";
-  entry: ClipboardEntry;
-}
-
-type Row = HeaderRow | EntryRow;
-
-const HEADER_ROW_HEIGHT = 28;
-
 /**
- * Groups already pinned-first/newest-first `entries` (the store's own
- * order) into a flat row list with a heading before each run — a "Pinned"
- * section, then one section per calendar day. Header rows are inert (see
- * `isDisabled` below): keyboard nav skips them, `onActivate`/`menu` never
- * see them.
+ * The section an entry sits under: "Pinned", else its calendar day. The
+ * store's order (pinned first, then newest first) already keeps each
+ * section contiguous.
  */
-function groupRows(entries: ClipboardEntry[], now: number): Row[] {
-  const rows: Row[] = [];
-  const pinned = entries.filter((e) => e.pinned);
-  const rest = entries.filter((e) => !e.pinned);
-
-  if (pinned.length) {
-    rows.push({ kind: "header", key: "group:pinned", label: "Pinned" });
-    for (const entry of pinned) rows.push({ kind: "entry", entry });
-  }
-
-  let lastLabel: string | null = null;
-  for (const entry of rest) {
-    const label = groupLabel(entry.createdAt, now);
-    if (label !== lastLabel) {
-      rows.push({ kind: "header", key: `group:${label}`, label });
-      lastLabel = label;
-    }
-    rows.push({ kind: "entry", entry });
-  }
-  return rows;
+function sectionOf(entry: ClipboardEntry, now: number): string {
+  return entry.pinned ? "Pinned" : groupLabel(entry.createdAt, now);
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
@@ -145,15 +109,13 @@ function DetailPane({ entry }: { entry: ClipboardEntry | null }) {
 /**
  * The Clipboard History list, as a screen pushed onto the launcher's
  * navigation stack. Built on the shared `ListScreen` (search, highlight,
- * Escape, ⌘K menu), Raycast-style: a grouped, virtualized list on the left
+ * Escape, ⌘K menu), Raycast-style: a grouped list on the left
  * (`detail`'s left column) and a full-content preview + metadata pane on the
  * right, synced to the highlighted row.
  *
  * The query is controlled here (rather than left to `ListScreen`'s default
- * internal state) so entries can be filtered *before* grouping — a header
- * only appears when its section still has a match, and the footer's item
- * count only ever counts real entries, never the header rows interleaved
- * into `data` for the virtualizer.
+ * internal state) so the empty message can tell "no history" from "no
+ * match"; `ListScreen` drops a section heading once none of its rows match.
  *
  * Knows nothing about the router; `../screen.tsx` mounts it.
  */
@@ -192,10 +154,9 @@ function ClipboardHistoryListScreen() {
     return (entries ?? []).filter((e) => e.preview.toLowerCase().includes(q));
   }, [entries, query]);
 
-  const rows = useMemo(
-    () => (entries == null ? null : groupRows(filtered, Date.now())),
-    [entries, filtered],
-  );
+  // Fixed per data load, so a section label can't flip mid-list at midnight.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const now = useMemo(() => Date.now(), [entries]);
 
   // Keeps `selectedEntry` valid whenever `filtered` changes: falls back to
   // the first entry when nothing's selected yet (belt-and-suspenders —
@@ -286,59 +247,47 @@ function ClipboardHistoryListScreen() {
 
   return (
     <ListScreen
-      data={rows}
-      getId={(row) => (row.kind === "header" ? row.key : row.entry.id)}
+      data={entries == null ? null : filtered}
+      getId={(entry) => entry.id}
+      getGroup={(entry) => sectionOf(entry, now)}
       inputValue={query}
       onInputChange={setQuery}
       serverFiltered
-      isDisabled={(row) => row.kind === "header"}
       placeholder="Search clipboard history..."
-      virtualized
-      itemHeight={(row) =>
-        row.kind === "header" ? HEADER_ROW_HEIGHT : LIST_SCREEN_ITEM_HEIGHT
-      }
-      renderItem={(row) =>
-        row.kind === "header" ? (
-          <div className="flex h-7 items-end px-1.5 pb-1 text-xs font-medium text-foreground-subtle">
-            {row.label}
-          </div>
-        ) : (
-          <ListScreen.Item
-            // Driven by `selectedEntry`, not Base UI's own per-item
-            // highlight state — those two can diverge right after a click
-            // (see the note on `onActivate` below), and the row that's
-            // visually marked "active" should always be the exact one the
-            // detail pane is previewing, never out of sync with it.
-            highlighted={row.entry.id === selectedEntry?.id}
-            icon={
-              row.entry.contentType === "image"
-                ? row.entry.imageDataUrl
-                : row.entry.pinned
-                  ? "📌"
-                  : "📋"
-            }
-            title={row.entry.preview}
-            onDoubleClick={() => void paste(row.entry)}
-          />
-        )
-      }
+      renderItem={(entry) => (
+        <ListScreen.Item
+          // Driven by `selectedEntry`, not Base UI's own per-item
+          // highlight state — those two can diverge right after a click
+          // (see the note on `onActivate` below), and the row that's
+          // visually marked "active" should always be the exact one the
+          // detail pane is previewing, never out of sync with it.
+          highlighted={entry.id === selectedEntry?.id}
+          icon={
+            entry.contentType === "image"
+              ? entry.imageDataUrl
+              : entry.pinned
+                ? "📌"
+                : "📋"
+          }
+          title={entry.preview}
+          onDoubleClick={() => void paste(entry)}
+        />
+      )}
       // Keyboard nav, right-click and Base UI's own auto-highlight all keep
       // `selectedEntry` in sync via `onHighlightChange` below. A plain click
       // only selects the row (so the preview shows); Enter (handled in
       // `onInputKeyDown`, not here — Base UI also turns it into a synthetic
       // click, which must stay inert) or a double-click (`onDoubleClick` on
       // the row) pastes it into the app underneath.
-      onActivate={(row) => {
-        if (row.kind === "entry") setSelectedEntry(row.entry);
-      }}
-      onInputKeyDown={(e, row) => {
+      onActivate={(entry) => setSelectedEntry(entry)}
+      onInputKeyDown={(e, entry) => {
         if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-        if (row?.kind !== "entry") return;
+        if (!entry) return;
         e.preventDefault();
-        void paste(row.entry);
+        void paste(entry);
       }}
-      onHighlightChange={(row) => {
-        if (row?.kind === "entry") setSelectedEntry(row.entry);
+      onHighlightChange={(entry) => {
+        if (entry) setSelectedEntry(entry);
       }}
       menu={menu}
       detail={() => <DetailPane entry={selectedEntry} />}

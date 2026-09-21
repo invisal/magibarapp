@@ -6,9 +6,11 @@ import {
   type HotkeySetResult,
   type QueryResult,
   type RequestSubtitleOptions,
+  type UpdateStatus,
 } from "../shared/types";
 import { actionsPanelApi } from "../main/native/actions-panel/preload";
 import { quitProcessApi } from "@extensions/quit-process/ipc/preload";
+import { xcodeCleanApi } from "@extensions/xcode-clean/ipc/preload";
 import { calculatorHistoryApi } from "@extensions/calculator-history/ipc/preload";
 import { clipboardHistoryApi } from "@extensions/clipboard-history/ipc/preload";
 import { groupApi } from "@extensions/group/ipc/preload";
@@ -45,6 +47,23 @@ const api = {
     get: (): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.hotkeyGet),
     set: (accelerator: string): Promise<HotkeySetResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.hotkeySet, accelerator),
+    /**
+     * Shared by every shortcut-recorder UI, not just this row — see the
+     * `hotkeyCapture*` doc comment in `shared/types.ts`. A recorder calls
+     * `captureStart()` on entering recording mode and `captureStop()` on
+     * leaving it (confirmed, cancelled, or unmounted), and subscribes via
+     * `onCaptured` for the `Win`-involving accelerators it wouldn't
+     * otherwise see through its own `keydown` listener.
+     */
+    captureStart: (): void => ipcRenderer.send(IPC_CHANNELS.hotkeyCaptureStart),
+    captureStop: (): void => ipcRenderer.send(IPC_CHANNELS.hotkeyCaptureStop),
+    onCaptured: (cb: (accelerator: string) => void): (() => void) => {
+      const listener = (_: unknown, accelerator: string): void =>
+        cb(accelerator);
+      ipcRenderer.on(IPC_CHANNELS.hotkeyCaptured, listener);
+      return () =>
+        ipcRenderer.removeListener(IPC_CHANNELS.hotkeyCaptured, listener);
+    },
   },
 
   /** Launcher: a deferred-subtitle row rendered (or force-refreshed) — resolves with the fresh subtitle. */
@@ -63,6 +82,21 @@ const api = {
     close: (): void => ipcRenderer.send(IPC_CHANNELS.windowClose),
   },
 
+  /** App version + auto-update (launcher footer) <-> main. */
+  update: {
+    get: (): Promise<{ version: string; status: UpdateStatus }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.updateGet),
+    check: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.updateCheck),
+    install: (): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.updateInstall),
+    onStatus: (cb: (status: UpdateStatus) => void): (() => void) => {
+      const listener = (_: unknown, status: UpdateStatus): void => cb(status);
+      ipcRenderer.on(IPC_CHANNELS.updateStatus, listener);
+      return () =>
+        ipcRenderer.removeListener(IPC_CHANNELS.updateStatus, listener);
+    },
+  },
+
   /** Widget manager window ↔ main. */
   widget: widgetApi,
 
@@ -77,6 +111,9 @@ const api = {
 
   /** Activity Monitor (list, start/stop polling, kill) ↔ main. */
   quitProcess: quitProcessApi,
+
+  /** Clean Xcode (scan, clean, reveal) ↔ main. */
+  xcodeClean: xcodeCleanApi,
 
   /** Quicklinks: the Create/Edit/Duplicate form and the Ctrl+K menu ↔ main. */
   quicklink: quicklinkApi,

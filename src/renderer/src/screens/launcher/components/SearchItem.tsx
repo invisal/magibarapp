@@ -1,8 +1,9 @@
 import { cn } from "cnfast";
-import { useEffect, useState, type ComponentPropsWithRef } from "react";
+import { useEffect, useRef, useState, type ComponentPropsWithRef } from "react";
 import type { LauncherAction } from "../../../../../shared/types";
-import { formatShortcut } from "@renderer/lib/shortcut";
 import { iconSrc } from "@renderer/lib/icon";
+import { ShortcutLabel } from "@renderer/shared/ui";
+import { useOnceVisible } from "@renderer/shared/ui/useOnceVisible";
 
 const TYPE_LABEL: Record<LauncherAction["type"], string> = {
   application: "Application",
@@ -55,9 +56,6 @@ interface SearchItemProps extends ComponentPropsWithRef<"div"> {
   forceRefreshToken?: number;
 }
 
-/** Locked to the virtualized list's row height for this item (see App.tsx). */
-export const SEARCH_ITEM_HEIGHT = 40;
-
 function Spinner() {
   return (
     <span
@@ -99,14 +97,16 @@ function SearchItem({
     setLoading(!!action.isLoading);
   }, [action.subtitle, action.isLoading]);
 
-  // Virtualization mounts this component only for rows currently on screen (plus
-  // overscan), so this naturally fires just for rows the user can actually see —
-  // never for the rest of an exposed-Widget list scrolled out of view. The
-  // main process caches/dedupes (TTL + single-flight), so re-requesting on every
-  // mount is cheap. Re-fires with `force: true` when `forceRefreshToken` changes
-  // (App.tsx sets it for exactly one row at a time, e.g. the row menu's "Refresh").
+  // Every row is mounted (the list isn't virtualized), so a deferred subtitle
+  // — a Widget hitting its API — waits until the row first scrolls near the
+  // viewport instead of firing for the whole list. The main process
+  // caches/dedupes (TTL + single-flight), so re-requesting is cheap. Re-fires
+  // with `force: true` when `forceRefreshToken` changes (LauncherScreen sets it
+  // for exactly one row at a time, e.g. the row menu's "Refresh").
+  const contentRef = useRef<HTMLDivElement>(null);
+  const seen = useOnceVisible(contentRef);
   useEffect(() => {
-    if (!isDeferredSubtitle) return;
+    if (!isDeferredSubtitle || !seen) return;
     let cancelled = false;
     setLoading(true);
     const opts = forceRefreshToken !== undefined ? { force: true } : undefined;
@@ -121,7 +121,7 @@ function SearchItem({
     return () => {
       cancelled = true;
     };
-  }, [id, isDeferredSubtitle, forceRefreshToken]);
+  }, [id, isDeferredSubtitle, seen, forceRefreshToken]);
 
   return (
     <div
@@ -135,19 +135,22 @@ function SearchItem({
       )}
     >
       <ItemIcon icon={icon} fallback={type === "quicklink" ? "🔗" : "?"} />
-      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+      <div
+        ref={contentRef}
+        className="flex min-w-0 flex-1 items-baseline gap-2"
+      >
         <span className="shrink-0 truncate">{title}</span>
         {boundAccelerator && (
           <kbd
             title="Global hotkey"
             className="shrink-0 rounded border border-border px-1.5 py-0.5 font-sans text-xs text-foreground-subtle"
           >
-            {formatShortcut(boundAccelerator)}
+            <ShortcutLabel accelerator={boundAccelerator} />
           </kbd>
         )}
         {shortcut && highlighted ? (
           <kbd className="shrink-0 rounded border border-border px-1.5 py-0.5 font-sans text-xs text-foreground-subtle">
-            {formatShortcut(shortcut)}
+            <ShortcutLabel accelerator={shortcut} />
           </kbd>
         ) : loading ? (
           <Spinner />

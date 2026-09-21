@@ -13,14 +13,24 @@
 //! plain C API that reports on-screen windows front-to-back by z-order, which is
 //! enough to find "the frontmost real app window" without `NSWorkspace`.
 
+mod dir_size;
+
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use core_foundation_sys::base::{kCFAllocatorDefault, CFRelease, CFTypeRef};
 use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
+use core_foundation_sys::mach_port::{
+  CFMachPortCreateRunLoopSource, CFMachPortInvalidate, CFMachPortRef,
+};
 use core_foundation_sys::number::{
   kCFBooleanFalse, kCFBooleanTrue, kCFNumberSInt32Type, kCFNumberSInt64Type, CFBooleanGetValue,
   CFBooleanRef, CFNumberGetValue, CFNumberRef,
 };
+use core_foundation_sys::runloop::{
+  kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRef, CFRunLoopRun,
+  CFRunLoopStop,
+};
 use core_foundation_sys::string::{kCFStringEncodingUTF8, CFStringCreateWithCString, CFStringRef};
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 
 mod actions_form;
@@ -529,4 +539,647 @@ pub fn list_listening_ports() -> Vec<NativePort> {
         .collect()
     })
     .unwrap_or_default()
+}
+
+// -- Global hotkeys via a CGEventTap --
+//
+// Electron's `globalShortcut` (Carbon's `RegisterEventHotKey` under the hood)
+// has two gaps `main/native/hotkeys.ts` needs closed, mirroring why
+// `native/win` exists at all: it can't represent a modifier-only chord
+// (`Shift+Command` with no other key — Raycast-style), and once some *other*
+// app has already registered a combo, our own `register()` for the same
+// combo never even reaches this process, so a shortcut recorder can't
+// observe the keystroke at all — it just watches the other app's action
+// fire. A session-level `CGEventTap` installed with `kCGHeadInsertEventTap`
+// sees every keystroke system-wide *before* Carbon's hotkey dispatch (the
+// same mechanism apps like Karabiner-Elements/BetterTouchTool rely on to
+// override "reserved" shortcuts), so it can both detect and — by returning
+// `NULL` instead of the event — suppress what `globalShortcut` can't reach.
+//
+// Needs the "Input Monitoring" privacy permission (System Settings > Privacy
+// & Security > Input Monitoring) — separate from the Accessibility grant
+// `AccessibilityRow` already requests for window snapping. There's no public
+// API to prompt for it the way `AXIsProcessTrustedWithOptions` can for
+// Accessibility; `CGEventTapCreate` below just returns `NULL` until the user
+// grants it manually and relaunches, same failure shape `@magibar/win`
+// failing to `require()` gets on the TS side (`hotkeys.ts` falls back to the
+// `globalShortcut` engine).
+
+type CGEventRef = *mut c_void;
+type CGEventTapProxy = *mut c_void;
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+  fn CGEventTapCreate(
+    tap: u32,
+    place: u32,
+    options: u32,
+    events_of_interest: u64,
+    callback: extern "C" fn(CGEventTapProxy, u32, CGEventRef, *mut c_void) -> CGEventRef,
+    user_info: *mut c_void,
+  ) -> CFMachPortRef;
+  fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+  fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+  fn CGEventGetFlags(event: CGEventRef) -> u64;
+}
+
+const K_CG_SESSION_EVENT_TAP: u32 = 1;
+const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
+const K_CG_EVENT_TAP_OPTION_DEFAULT: u32 = 0;
+
+const K_CG_EVENT_KEY_DOWN: u32 = 10;
+const K_CG_EVENT_KEY_UP: u32 = 11;
+const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+// `CGEventType`'s two "the OS gave up on us" values — sent instead of a real
+// event when this callback (or another tap ahead of it) is judged too slow.
+// Our callback body never blocks, so this should only ever be transient;
+// re-enabling immediately is the documented recovery.
+const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFFFFFE;
+const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFFFFFF;
+
+const K_CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
+
+const FLAG_SHIFT: u64 = 0x0002_0000; // kCGEventFlagMaskShift
+const FLAG_CONTROL: u64 = 0x0004_0000; // kCGEventFlagMaskControl
+const FLAG_OPTION: u64 = 0x0008_0000; // kCGEventFlagMaskAlternate
+const FLAG_COMMAND: u64 = 0x0010_0000; // kCGEventFlagMaskCommand
+const RELEVANT_FLAGS: u64 = FLAG_SHIFT | FLAG_CONTROL | FLAG_OPTION | FLAG_COMMAND;
+
+/// A held-modifier set, masked from `CGEventGetFlags` — unlike
+/// `native/win`'s `Modifiers`, this never needs to track which physical side
+/// (left/right) was pressed: `format_accelerator`/`eventToAccelerator` don't
+/// distinguish sides on mac, and `CGEventGetFlags` already reports the
+/// *combined* modifier state for every event (keydown, keyup, and
+/// flagsChanged alike), so there's no need to hand-track individual
+/// modifier-key down/up transitions the way the Windows hook does.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Modifiers {
+  cmd: bool,
+  ctrl: bool,
+  alt: bool,
+  shift: bool,
+}
+
+impl Modifiers {
+  fn from_flags(flags: u64) -> Self {
+    Modifiers {
+      cmd: flags & FLAG_COMMAND != 0,
+      ctrl: flags & FLAG_CONTROL != 0,
+      alt: flags & FLAG_OPTION != 0,
+      shift: flags & FLAG_SHIFT != 0,
+    }
+  }
+
+  fn is_empty(&self) -> bool {
+    !self.cmd && !self.ctrl && !self.alt && !self.shift
+  }
+
+  fn union(&self, other: Modifiers) -> Modifiers {
+    Modifiers {
+      cmd: self.cmd || other.cmd,
+      ctrl: self.ctrl || other.ctrl,
+      alt: self.alt || other.alt,
+      shift: self.shift || other.shift,
+    }
+  }
+}
+
+/// Mac virtual keycode -> the token `eventToAccelerator`'s mac branch would
+/// produce for the same physical key (`shortcut.ts`'s `CODE_TO_KEY`/
+/// `keyFromCode`), for reporting a captured combo back to JS. `None` for a
+/// keycode with no accelerator equivalent — such a key is simply not
+/// reported, same as `eventToAccelerator` silently ignoring it.
+fn keycode_to_token(code: i64) -> Option<String> {
+  Some(
+    match code {
+      0x00 => "A", 0x0B => "B", 0x08 => "C", 0x02 => "D", 0x0E => "E", 0x03 => "F",
+      0x05 => "G", 0x04 => "H", 0x22 => "I", 0x26 => "J", 0x28 => "K", 0x25 => "L",
+      0x2E => "M", 0x2D => "N", 0x1F => "O", 0x23 => "P", 0x0C => "Q", 0x0F => "R",
+      0x01 => "S", 0x11 => "T", 0x20 => "U", 0x09 => "V", 0x0D => "W", 0x07 => "X",
+      0x10 => "Y", 0x06 => "Z",
+      0x1D => "0", 0x12 => "1", 0x13 => "2", 0x14 => "3", 0x15 => "4",
+      0x17 => "5", 0x16 => "6", 0x1A => "7", 0x1C => "8", 0x19 => "9",
+      0x24 => "Return", 0x30 => "Tab", 0x31 => "Space", 0x33 => "Backspace",
+      0x35 => "Escape", 0x75 => "Delete",
+      0x7E => "Up", 0x7D => "Down", 0x7B => "Left", 0x7C => "Right",
+      0x2B => ",", 0x2F => ".", 0x2C => "/", 0x2A => "\\", 0x29 => ";",
+      0x27 => "'", 0x21 => "[", 0x1E => "]", 0x1B => "-", 0x18 => "=", 0x32 => "`",
+      0x7A => "F1", 0x78 => "F2", 0x63 => "F3", 0x76 => "F4", 0x60 => "F5",
+      0x61 => "F6", 0x62 => "F7", 0x64 => "F8", 0x65 => "F9", 0x6D => "F10",
+      0x67 => "F11", 0x6F => "F12", 0x69 => "F13", 0x6B => "F14", 0x71 => "F15",
+      0x6A => "F16", 0x40 => "F17", 0x4F => "F18", 0x50 => "F19", 0x5A => "F20",
+      _ => return None,
+    }
+    .to_string(),
+  )
+}
+
+/// The reverse of `keycode_to_token` — parses the key token out of an
+/// accelerator string being registered.
+fn token_to_keycode(token: &str) -> Option<i64> {
+  if token.len() == 1 {
+    let c = token.chars().next()?;
+    if c.is_ascii_alphabetic() {
+      return Some(match c.to_ascii_uppercase() {
+        'A' => 0x00, 'B' => 0x0B, 'C' => 0x08, 'D' => 0x02, 'E' => 0x0E, 'F' => 0x03,
+        'G' => 0x05, 'H' => 0x04, 'I' => 0x22, 'J' => 0x26, 'K' => 0x28, 'L' => 0x25,
+        'M' => 0x2E, 'N' => 0x2D, 'O' => 0x1F, 'P' => 0x23, 'Q' => 0x0C, 'R' => 0x0F,
+        'S' => 0x01, 'T' => 0x11, 'U' => 0x20, 'V' => 0x09, 'W' => 0x0D, 'X' => 0x07,
+        'Y' => 0x10, 'Z' => 0x06,
+        _ => return None,
+      });
+    }
+    if c.is_ascii_digit() {
+      return Some(match c {
+        '0' => 0x1D, '1' => 0x12, '2' => 0x13, '3' => 0x14, '4' => 0x15,
+        '5' => 0x17, '6' => 0x16, '7' => 0x1A, '8' => 0x1C, '9' => 0x19,
+        _ => return None,
+      });
+    }
+    return Some(match c {
+      ',' => 0x2B, '.' => 0x2F, '/' => 0x2C, '\\' => 0x2A, ';' => 0x29,
+      '\'' => 0x27, '[' => 0x21, ']' => 0x1E, '-' => 0x1B, '=' => 0x18, '`' => 0x32,
+      _ => return None,
+    });
+  }
+  Some(match token.to_lowercase().as_str() {
+    "space" => 0x31,
+    "up" => 0x7E,
+    "down" => 0x7D,
+    "left" => 0x7B,
+    "right" => 0x7C,
+    "escape" | "esc" => 0x35,
+    "tab" => 0x30,
+    "return" | "enter" => 0x24,
+    "backspace" => 0x33,
+    "delete" => 0x75,
+    "f1" => 0x7A, "f2" => 0x78, "f3" => 0x63, "f4" => 0x76, "f5" => 0x60,
+    "f6" => 0x61, "f7" => 0x62, "f8" => 0x64, "f9" => 0x65, "f10" => 0x6D,
+    "f11" => 0x67, "f12" => 0x6F, "f13" => 0x69, "f14" => 0x6B, "f15" => 0x71,
+    "f16" => 0x6A, "f17" => 0x40, "f18" => 0x4F, "f19" => 0x50, "f20" => 0x5A,
+    _ => return None,
+  })
+}
+
+/// A parsed accelerator: a modifier set plus an optional non-modifier key.
+/// `key: None` is a modifier-only chord (`Command` alone, `Command+Shift`,
+/// …) — unlike `native/win`, which only ever special-cases a *lone* `Super`
+/// tap, this tap can watch a release of *any* combination of modifiers, so
+/// there's no reason to restrict a chord-only binding to a single modifier.
+struct ParsedAccelerator {
+  mods: Modifiers,
+  key: Option<i64>,
+}
+
+/// Parses the same accelerator vocabulary `eventToAccelerator`/
+/// `matchesShortcut` (`shortcut.ts`) produce/accept on mac — `Command`/`Cmd`/
+/// `Meta`/`Super` (and `CommandOrControl`/`CmdOrCtrl`, which resolve to
+/// `Command` on mac same as `matchesShortcut` does), `Control`/`Ctrl`,
+/// `Option`/`Alt`, `Shift`, plus an optional key token. Returns `None` for an
+/// unmapped key token or no modifier at all (never valid — a bare key would
+/// collide with normal typing).
+fn parse_accelerator(accelerator: &str) -> Option<ParsedAccelerator> {
+  let mut mods = Modifiers::default();
+  let mut key: Option<i64> = None;
+  for token in accelerator.split('+').filter(|t| !t.is_empty()) {
+    match token.to_lowercase().as_str() {
+      "commandorcontrol" | "cmdorctrl" | "command" | "cmd" | "meta" | "super" => mods.cmd = true,
+      "control" | "ctrl" => mods.ctrl = true,
+      "alt" | "option" => mods.alt = true,
+      "shift" => mods.shift = true,
+      other => key = Some(token_to_keycode(other)?),
+    }
+  }
+  if mods.is_empty() {
+    return None;
+  }
+  Some(ParsedAccelerator { mods, key })
+}
+
+/// Builds the same accelerator-string shape `eventToAccelerator`'s mac
+/// branch does — `Command`, `Control`, `Option`, `Shift`, then an optional
+/// key token, in that order — for reporting a captured combo back to JS.
+fn format_accelerator(mods: Modifiers, key: Option<&str>) -> String {
+  let mut parts: Vec<&str> = Vec::with_capacity(5);
+  if mods.cmd {
+    parts.push("Command");
+  }
+  if mods.ctrl {
+    parts.push("Control");
+  }
+  if mods.alt {
+    parts.push("Option");
+  }
+  if mods.shift {
+    parts.push("Shift");
+  }
+  if let Some(k) = key {
+    parts.push(k);
+  }
+  parts.join("+")
+}
+
+struct HotkeyEntry {
+  id: String,
+  parsed: ParsedAccelerator,
+}
+
+/// Live state the tap callback reads/updates on every keystroke. A single
+/// process-wide instance — `start_hotkey_watcher` only ever runs once (one
+/// tap per app) — behind a `Mutex` since the tap thread and whichever thread
+/// calls `register`/`unregister` (the JS/napi thread) both touch it.
+#[derive(Default)]
+struct HookState {
+  entries: Vec<HotkeyEntry>,
+  /// The modifier set actually held right now, per the most recent
+  /// `flagsChanged` event — used only to detect the empty <-> non-empty
+  /// transitions that start/end a chord session below.
+  current_mods: Modifiers,
+  /// The union of every modifier combination seen since the current
+  /// "nothing held -> something held" session began; `None` while nothing is
+  /// held. Union rather than "whatever's held right now" so pressing
+  /// `Command` then `Shift` then releasing `Command` first still reports/
+  /// matches `Command+Shift` — the full chord the user actually held, not
+  /// just whatever's left at the moment the first key comes back up.
+  chord_session: Option<Modifiers>,
+  /// Set the moment a real (non-modifier) key fires during the current
+  /// chord session, so its eventual all-released transition is *not* also
+  /// treated as completing a modifier-only chord — it was a `mods+key` combo
+  /// instead, already handled at keydown.
+  chord_cancelled: bool,
+  /// The keycode a `mods+key` match/capture last suppressed, so its
+  /// key-repeat and eventual keyup stay suppressed too, without re-firing/
+  /// re-reporting.
+  suppressed_key: Option<i64>,
+  /// Set by `HotkeyWatcher::start_capture`/`stop_capture`. While true, any
+  /// reportable combo (a `mods+key` press, or a modifier-only chord release)
+  /// is sent to `capture_callback` instead of checked against `entries` —
+  /// see the module doc comment for why a shortcut recorder needs this at
+  /// all: an already-registered-elsewhere combo otherwise never reaches this
+  /// process's normal keydown handling to be observed.
+  capturing: bool,
+}
+
+fn hook_state() -> &'static Mutex<HookState> {
+  static STATE: OnceLock<Mutex<HookState>> = OnceLock::new();
+  STATE.get_or_init(|| Mutex::new(HookState::default()))
+}
+
+fn hook_callback() -> &'static Mutex<Option<ThreadsafeFunction<String>>> {
+  static CALLBACK: OnceLock<Mutex<Option<ThreadsafeFunction<String>>>> = OnceLock::new();
+  CALLBACK.get_or_init(|| Mutex::new(None))
+}
+
+fn capture_callback() -> &'static Mutex<Option<ThreadsafeFunction<String>>> {
+  static CALLBACK: OnceLock<Mutex<Option<ThreadsafeFunction<String>>>> = OnceLock::new();
+  CALLBACK.get_or_init(|| Mutex::new(None))
+}
+
+/// The live tap port, stashed so the callback can re-enable it after a
+/// `kCGEventTapDisabledByTimeout`/`...ByUserInput` notification — `None`
+/// until `start_hotkey_watcher`'s background thread finishes creating it.
+fn tap_port() -> &'static Mutex<Option<isize>> {
+  static PORT: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
+  PORT.get_or_init(|| Mutex::new(None))
+}
+
+fn fire_hotkey(id: &str) {
+  if let Some(tsfn) = hook_callback().lock().unwrap().as_ref() {
+    tsfn.call(Ok(id.to_string()), ThreadsafeFunctionCallMode::NonBlocking);
+  }
+}
+
+fn report_capture(accelerator: &str) {
+  if let Some(tsfn) = capture_callback().lock().unwrap().as_ref() {
+    tsfn.call(
+      Ok(accelerator.to_string()),
+      ThreadsafeFunctionCallMode::NonBlocking,
+    );
+  }
+}
+
+/// Handles a `flagsChanged` event (a modifier key going down or up).
+/// Returns whether this event should be suppressed — only ever true for the
+/// single event that completes a matched/captured modifier-only chord; every
+/// other modifier transition passes through untouched; passing through the
+/// individual presses that build up to a chord is safe (doesn't corrupt a
+/// `mods+key` combo elsewhere — `CGEventGetFlags` on a later keydown reflects
+/// live hardware modifier state regardless of whether we ate an earlier
+/// `flagsChanged` notification for it).
+fn handle_flags_changed(mods: Modifiers) -> bool {
+  let mut state = hook_state().lock().unwrap();
+  let was_empty = state.current_mods.is_empty();
+  state.current_mods = mods;
+
+  if mods.is_empty() {
+    let session = state.chord_session.take();
+    let cancelled = state.chord_cancelled;
+    state.chord_cancelled = false;
+    let Some(session_mods) = session else {
+      return false;
+    };
+    if cancelled || session_mods.is_empty() {
+      return false;
+    }
+    if state.capturing {
+      drop(state);
+      report_capture(&format_accelerator(session_mods, None));
+      return true;
+    }
+    let matched = state
+      .entries
+      .iter()
+      .find(|e| e.parsed.key.is_none() && e.parsed.mods == session_mods)
+      .map(|e| e.id.clone());
+    drop(state);
+    match matched {
+      Some(id) => {
+        fire_hotkey(&id);
+        true
+      }
+      None => false,
+    }
+  } else {
+    if was_empty {
+      state.chord_session = Some(mods);
+      state.chord_cancelled = false;
+    } else if let Some(session_mods) = state.chord_session {
+      state.chord_session = Some(session_mods.union(mods));
+    }
+    false
+  }
+}
+
+/// Handles a `keyDown`/`keyUp` event for an ordinary (non-modifier) key.
+/// Returns whether this event should be suppressed.
+fn handle_key_event(mods: Modifiers, keycode: i64, is_down: bool) -> bool {
+  let mut state = hook_state().lock().unwrap();
+
+  if !is_down {
+    if state.suppressed_key == Some(keycode) {
+      state.suppressed_key = None;
+      return true;
+    }
+    return false;
+  }
+
+  // A real key firing means whatever modifier session is live (if any) is
+  // no longer a pure chord — cancel it so releasing the modifiers afterward
+  // doesn't *also* fire/report a modifier-only match.
+  state.chord_cancelled = true;
+
+  if mods.is_empty() {
+    // No modifier held: never a valid accelerator (see `eventToAccelerator`)
+    // — leave it alone so Escape/Enter/plain typing inside the recorder
+    // (and everywhere else) behave exactly as if this tap didn't exist.
+    return false;
+  }
+
+  if state.suppressed_key == Some(keycode) {
+    return true; // key-repeat of an already-fired/-captured combo's key
+  }
+
+  let Some(token) = keycode_to_token(keycode) else {
+    return false;
+  };
+
+  if state.capturing {
+    state.suppressed_key = Some(keycode);
+    drop(state);
+    report_capture(&format_accelerator(mods, Some(&token)));
+    return true;
+  }
+
+  let matched = state
+    .entries
+    .iter()
+    .find(|e| e.parsed.key == Some(keycode) && e.parsed.mods == mods)
+    .map(|e| e.id.clone());
+  match matched {
+    Some(id) => {
+      state.suppressed_key = Some(keycode);
+      drop(state);
+      fire_hotkey(&id);
+      true
+    }
+    None => false,
+  }
+}
+
+extern "C" fn hotkey_tap_callback(
+  _proxy: CGEventTapProxy,
+  event_type: u32,
+  event: CGEventRef,
+  _user_info: *mut c_void,
+) -> CGEventRef {
+  if event_type == K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT
+    || event_type == K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT
+  {
+    if let Some(tap) = *tap_port().lock().unwrap() {
+      unsafe { CGEventTapEnable(tap as CFMachPortRef, true) };
+    }
+    return event;
+  }
+
+  let flags = unsafe { CGEventGetFlags(event) } & RELEVANT_FLAGS;
+  let mods = Modifiers::from_flags(flags);
+
+  let suppress = if event_type == K_CG_EVENT_FLAGS_CHANGED {
+    handle_flags_changed(mods)
+  } else {
+    let is_down = event_type == K_CG_EVENT_KEY_DOWN;
+    let keycode = unsafe { CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) };
+    handle_key_event(mods, keycode, is_down)
+  };
+
+  if suppress {
+    std::ptr::null_mut()
+  } else {
+    event
+  }
+}
+
+/// Handle for the background hotkey watcher `start_hotkey_watcher` starts.
+/// Dropping this without calling `stop()` leaks the event tap and its
+/// run-loop thread for the rest of the process's life — callers must
+/// `stop()` it explicitly (e.g. on app quit), mirroring `native/win`'s
+/// `HotkeyWatcher`.
+#[napi]
+pub struct HotkeyWatcher {
+  tap: isize,
+  run_loop: isize,
+  thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[napi]
+impl HotkeyWatcher {
+  /// Parses and stores `accelerator` under `id`, replacing whatever was
+  /// previously registered under that id. Returns `false` if `accelerator`
+  /// doesn't parse, or if a *different* id already holds the exact same
+  /// modifiers+key — unlike `globalShortcut`, this never asks macOS for
+  /// exclusive ownership of the combo (it just watches, and on a match
+  /// suppresses, every keystroke itself), so nothing upstream would ever
+  /// reject a genuine duplicate on its own: without this check, `entries`
+  /// would happily hold two ids for the same combo, and whichever happened
+  /// to land first in the list would silently keep winning every match in
+  /// `handle_key_event`/`handle_flags_changed` forever, while the *other*
+  /// id's `register()` call reported success anyway.
+  #[napi]
+  pub fn register(&self, id: String, accelerator: String) -> bool {
+    let Some(parsed) = parse_accelerator(&accelerator) else {
+      return false;
+    };
+    let mut state = hook_state().lock().unwrap();
+    let held_by_another = state
+      .entries
+      .iter()
+      .any(|e| e.id != id && e.parsed.mods == parsed.mods && e.parsed.key == parsed.key);
+    if held_by_another {
+      return false;
+    }
+    state.entries.retain(|e| e.id != id);
+    state.entries.push(HotkeyEntry { id, parsed });
+    true
+  }
+
+  /// Idempotent — removing an id that isn't registered is a no-op.
+  #[napi]
+  pub fn unregister(&self, id: String) {
+    hook_state().lock().unwrap().entries.retain(|e| e.id != id);
+  }
+
+  /// Starts reporting every reportable keystroke (any `mods+key` press, or a
+  /// modifier-only chord's release) to `callback` as a captured accelerator
+  /// string, instead of matching it against registered entries — see
+  /// `HookState::capturing`'s doc comment for why a shortcut recorder needs
+  /// this rather than its own DOM listener: an already-bound combo would
+  /// otherwise never reach this process at all. A keystroke with no modifier
+  /// held is untouched and keeps reaching the focused window's own keydown
+  /// handler exactly as before (Escape-to-cancel, Enter-to-confirm, …).
+  /// Replaces any previous capture callback if already capturing.
+  #[napi]
+  pub fn start_capture(&self, callback: ThreadsafeFunction<String>) {
+    *capture_callback().lock().unwrap() = Some(callback);
+    let mut state = hook_state().lock().unwrap();
+    state.capturing = true;
+    state.chord_session = None;
+    state.chord_cancelled = false;
+    state.suppressed_key = None;
+  }
+
+  /// Stops capture mode and resumes normal entry-matching. Idempotent.
+  #[napi]
+  pub fn stop_capture(&self) {
+    let mut state = hook_state().lock().unwrap();
+    state.capturing = false;
+    state.chord_session = None;
+    state.chord_cancelled = false;
+    state.suppressed_key = None;
+    *capture_callback().lock().unwrap() = None;
+  }
+
+  /// Disables and invalidates the tap, stops its run loop, and joins the
+  /// background thread. Idempotent.
+  #[napi]
+  pub fn stop(&mut self) {
+    if self.run_loop != 0 {
+      unsafe { CFRunLoopStop(self.run_loop as CFRunLoopRef) };
+      self.run_loop = 0;
+    }
+    if let Some(thread) = self.thread.take() {
+      let _ = thread.join();
+    }
+    self.tap = 0;
+    {
+      let mut state = hook_state().lock().unwrap();
+      state.entries.clear();
+      state.capturing = false;
+    }
+    *hook_callback().lock().unwrap() = None;
+    *capture_callback().lock().unwrap() = None;
+  }
+}
+
+/// Starts the global-hotkey watcher: a background thread installs a
+/// session-level `CGEventTap` (requires the user to have granted Magibar
+/// Input Monitoring access — see the module doc comment) and runs a
+/// `CFRunLoop` to keep receiving callbacks on it, invoking `callback` with
+/// the registered id whenever a bound accelerator fires. Entries are
+/// registered/unregistered afterward via the returned `HotkeyWatcher`.
+///
+/// Blocks briefly waiting for the background thread to finish setting up, so
+/// a failure (permission not granted, or run-loop-source creation failing)
+/// can be reported by returning a watcher whose `tap` is already 0 rather
+/// than one that silently never calls back — same contract as
+/// `native/win`'s `start_hotkey_watcher`.
+#[napi]
+pub fn start_hotkey_watcher(callback: ThreadsafeFunction<String>) -> HotkeyWatcher {
+  *hook_callback().lock().unwrap() = Some(callback);
+  hook_state().lock().unwrap().entries.clear();
+
+  let (tap_tx, tap_rx) = std::sync::mpsc::channel::<isize>();
+  let (rl_tx, rl_rx) = std::sync::mpsc::channel::<isize>();
+
+  let thread = std::thread::spawn(move || {
+    let mask: u64 = (1u64 << K_CG_EVENT_KEY_DOWN)
+      | (1u64 << K_CG_EVENT_KEY_UP)
+      | (1u64 << K_CG_EVENT_FLAGS_CHANGED);
+
+    let tap = unsafe {
+      CGEventTapCreate(
+        K_CG_SESSION_EVENT_TAP,
+        K_CG_HEAD_INSERT_EVENT_TAP,
+        K_CG_EVENT_TAP_OPTION_DEFAULT,
+        mask,
+        hotkey_tap_callback,
+        std::ptr::null_mut(),
+      )
+    };
+    if tap.is_null() {
+      eprintln!(
+        "[mac-hotkeys] CGEventTapCreate failed — grant Magibar \"Input \
+         Monitoring\" access in System Settings > Privacy & Security, then \
+         relaunch."
+      );
+      let _ = tap_tx.send(0);
+      return;
+    }
+
+    let source = unsafe { CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) };
+    if source.is_null() {
+      unsafe { CFRelease(tap as CFTypeRef) };
+      let _ = tap_tx.send(0);
+      return;
+    }
+
+    let run_loop = unsafe { CFRunLoopGetCurrent() };
+    unsafe {
+      CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
+      CGEventTapEnable(tap, true);
+    }
+    *tap_port().lock().unwrap() = Some(tap as isize);
+
+    let _ = tap_tx.send(tap as isize);
+    let _ = rl_tx.send(run_loop as isize);
+
+    unsafe { CFRunLoopRun() };
+
+    // `CFRunLoopStop` (from `HotkeyWatcher::stop`) returned us here.
+    unsafe {
+      CGEventTapEnable(tap, false);
+      CFMachPortInvalidate(tap);
+      CFRelease(source as CFTypeRef);
+      CFRelease(tap as CFTypeRef);
+    }
+    *tap_port().lock().unwrap() = None;
+  });
+
+  let tap = tap_rx.recv().unwrap_or(0);
+  let run_loop = if tap != 0 { rl_rx.recv().unwrap_or(0) } else { 0 };
+
+  HotkeyWatcher {
+    tap,
+    run_loop,
+    thread: Some(thread),
+  }
 }

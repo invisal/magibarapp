@@ -699,9 +699,11 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.HotkeyWatcher = nativeBinding.HotkeyWatcher
 module.exports.applyWindowRect = nativeBinding.applyWindowRect
 module.exports.closeActionsForm = nativeBinding.closeActionsForm
 module.exports.closeActionsPanel = nativeBinding.closeActionsPanel
+module.exports.dirSize = nativeBinding.dirSize
 module.exports.failActionsForm = nativeBinding.failActionsForm
 module.exports.frontmostPid = nativeBinding.frontmostPid
 module.exports.getWindowRect = nativeBinding.getWindowRect
@@ -712,4 +714,5 @@ module.exports.listProcesses = nativeBinding.listProcesses
 module.exports.pasteboardChangeCount = nativeBinding.pasteboardChangeCount
 module.exports.showActionsForm = nativeBinding.showActionsForm
 module.exports.showActionsPanel = nativeBinding.showActionsPanel
+module.exports.startHotkeyWatcher = nativeBinding.startHotkeyWatcher
 module.exports.toggleFullscreen = nativeBinding.toggleFullscreen

@@ -61,26 +61,81 @@ const KEYWORD_FUZZY_SCORE = 10;
 const TAG_EXACT_SCORE = 20;
 /** Score when a tag equals one word of a multi-word query. */
 const TAG_WORD_SCORE = 3;
+/** Score when an alternative name equals the whole query — above a tag, below a keyword. */
+const ALT_NAME_EXACT_SCORE = 30;
+/** Charged against a fuzzy alt-name hit so it ranks just under the same hit on the real title. */
+const ALT_NAME_PENALTY = 0.25;
+/**
+ * Subtitle scores. Deliberately below any decent title hit (a word-start title
+ * match is worth 1+), so a description can surface a row but never outrank one
+ * whose name matches — yet above a scattered, mid-word title match (≤ 0).
+ */
+const SUBTITLE_WORD_PREFIX_SCORE = 0.5;
+const SUBTITLE_SUBSTRING_SCORE = 0.1;
+/** Shortest query word allowed to hit a subtitle; a lone letter would match half the list. */
+const SUBTITLE_MIN_TOKEN_LENGTH = 2;
+/** Shortest query word allowed a mid-word substring hit in a subtitle. */
+const SUBTITLE_SUBSTRING_MIN_LENGTH = 3;
 
 /**
- * Match `query` against an action, considering its title, its optional `keyword`
- * alias, and its optional `tags`. A keyword lets `"g cats"` surface the "Google"
- * quicklink even though the title never fuzzy-matches the whole query; an exact
+ * Match `query` against an action, considering its title, static subtitle,
+ * optional `keyword` alias, and optional `tags`.
+ *
+ * The query is split into words and **every word must match somewhere** (AND,
+ * any order), so `"code vs"` or `"chrome work"` work. A word scores as the best
+ * of: a fuzzy title match; a tag equal to it; a subtitle hit. Fields use
+ * different rules on purpose — the title is fuzzy (typo/abbreviation
+ * friendly), while the subtitle is strict (word prefix, or substring for
+ * longer words) because a subsequence test over a long description matches
+ * nearly anything. Word scores are summed; the whole query fuzzy-matched
+ * against the title is also tried, and the better of the two wins (so a
+ * single-word query scores exactly as `fuzzyMatch` does).
+ *
+ * Overrides on top of that: a keyword lets `"g cats"` surface the "Google"
+ * quicklink even though the rest of the query is an argument, and an exact
  * keyword hit is scored well above any fuzzy title match so a deliberately-typed
  * alias wins. A tag equal to the whole query surfaces everything sharing it
- * (`"work"` → every quicklink tagged `work`); a tag matching just one word of a
- * longer query is only a weak nudge.
+ * (`"work"` → every quicklink tagged `work`).
+ *
+ * Pass only a *static* subtitle — a deferred/live one isn't known at query time.
  */
 export function matchAction(
   query: string,
-  action: { title: string; keyword?: string; tags?: string[] },
+  action: {
+    title: string;
+    altNames?: string[];
+    subtitle?: string;
+    keyword?: string;
+    tags?: string[];
+  },
 ): MatchResult {
-  const titleMatch = fuzzyMatch(query, action.title);
-  let best = titleMatch;
+  const trimmed = query.trim();
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  const tags = action.tags?.map((tag) => tag.toLowerCase()) ?? [];
+  const altNames = action.altNames ?? [];
+
+  let best = fuzzyMatch(trimmed, action.title);
+
+  // The whole query against each alt name, as against the real title.
+  for (const name of altNames) {
+    const score = altScore(fuzzyMatch(trimmed, name));
+    if (score > best.score) best = { match: true, score };
+  }
+
+  const wordsScore = scoreWords(
+    tokens,
+    action.title,
+    action.subtitle,
+    tags,
+    altNames,
+  );
+  if (wordsScore !== null && wordsScore > best.score) {
+    best = { match: true, score: wordsScore };
+  }
 
   const keyword = action.keyword?.trim();
   if (keyword) {
-    const firstWord = query.trim().split(/\s+/, 1)[0] ?? "";
+    const firstWord = tokens[0] ?? "";
     if (fuzzyMatch(firstWord, keyword).match) {
       const keywordScore =
         firstWord.toLowerCase() === keyword.toLowerCase()
@@ -90,18 +145,73 @@ export function matchAction(
     }
   }
 
-  if (action.tags?.length) {
-    const normalized = query.trim().toLowerCase();
-    const words = new Set(normalized.split(/\s+/).filter(Boolean));
-    const tags = action.tags.map((tag) => tag.toLowerCase());
-    if (tags.includes(normalized)) {
-      best = { match: true, score: Math.max(best.score, TAG_EXACT_SCORE) };
-    } else if (!best.match && tags.some((tag) => words.has(tag))) {
-      best = { match: true, score: TAG_WORD_SCORE };
-    }
+  if (tags.includes(trimmed.toLowerCase())) {
+    best = { match: true, score: Math.max(best.score, TAG_EXACT_SCORE) };
   }
 
   return best;
+}
+
+/**
+ * Sum, over `tokens`, of each word's best field score — or `null` if any word
+ * matches nothing (AND semantics) or there are no words.
+ */
+function scoreWords(
+  tokens: string[],
+  title: string,
+  subtitle: string | undefined,
+  tags: string[],
+  altNames: string[],
+): number | null {
+  if (tokens.length === 0) return null;
+  const subtitleWords = subtitle ? wordsOf(subtitle) : [];
+  const subtitleLower = subtitle?.toLowerCase() ?? "";
+
+  let total = 0;
+  for (const token of tokens) {
+    const lower = token.toLowerCase();
+    let tokenBest = NO_MATCH_SCORE;
+
+    const titleMatch = fuzzyMatch(token, title);
+    if (titleMatch.match) tokenBest = titleMatch.score;
+
+    for (const name of altNames) {
+      tokenBest = Math.max(tokenBest, altScore(fuzzyMatch(token, name)));
+    }
+
+    if (tags.includes(lower)) tokenBest = Math.max(tokenBest, TAG_WORD_SCORE);
+
+    if (subtitle && token.length >= SUBTITLE_MIN_TOKEN_LENGTH) {
+      if (subtitleWords.some((word) => word.startsWith(lower))) {
+        tokenBest = Math.max(tokenBest, SUBTITLE_WORD_PREFIX_SCORE);
+      } else if (
+        token.length >= SUBTITLE_SUBSTRING_MIN_LENGTH &&
+        subtitleLower.includes(lower)
+      ) {
+        tokenBest = Math.max(tokenBest, SUBTITLE_SUBSTRING_SCORE);
+      }
+    }
+
+    if (tokenBest === NO_MATCH_SCORE) return null;
+    total += tokenBest;
+  }
+  return total;
+}
+
+/** A hit on an alternative name: an exact one scores high, a fuzzy one just under the same title hit. */
+function altScore(result: MatchResult): number {
+  if (!result.match) return NO_MATCH_SCORE;
+  return result.score === EXACT_MATCH_SCORE
+    ? ALT_NAME_EXACT_SCORE
+    : result.score - ALT_NAME_PENALTY;
+}
+
+/** Lowercased alphanumeric runs: `"C:\\Users\\me"` → `["c", "users", "me"]`. */
+function wordsOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
 }
 
 /** Is every character of `needle` present in `haystack`, in order? */

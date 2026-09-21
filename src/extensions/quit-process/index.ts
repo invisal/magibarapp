@@ -60,6 +60,7 @@ export class QuitProcessExtension extends Extension {
           id: "quit-process:open",
           title: "Quit Processes",
           subtitle: "View running processes and quit or force quit them",
+          altNames: ["Kill Process", "End Task", "Task Manager"],
           icon: QUIT_PROCESS_ICON,
           type: "command",
         },

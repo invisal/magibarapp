@@ -1,11 +1,14 @@
 import { app } from "electron";
 import type { IpcMain } from "electron";
 import { join } from "node:path";
-import type {
-  CalculatorSettings,
-  ExecuteResult,
-  QueryResult,
-  RequestSubtitleOptions,
+import {
+  ACTION_GROUP_ORDER,
+  defaultActionGroup,
+  type ActionGroup,
+  type CalculatorSettings,
+  type ExecuteResult,
+  type QueryResult,
+  type RequestSubtitleOptions,
 } from "../shared/types";
 import { evaluate } from "./calculator";
 import { matchAction } from "@shared/search";
@@ -29,6 +32,7 @@ import { configureActionResolver, configureExtensions } from "@core/base";
 import { GroupExtension } from "@extensions/group";
 import type { ActionDefinition } from "./types";
 import { QuitProcessExtension } from "@extensions/quit-process";
+import { XcodeCleanExtension } from "@extensions/xcode-clean";
 import { CalculatorHistoryExtension } from "@extensions/calculator-history";
 import { ClipboardHistoryExtension } from "@extensions/clipboard-history";
 import { ExtensionStorage } from "@core/storage";
@@ -82,6 +86,13 @@ export const clipboardHistory = new ClipboardHistoryExtension();
  * window.
  */
 export const quitProcess = new QuitProcessExtension();
+
+/**
+ * The Clean Xcode extension (macOS only). Scans nothing until its screen
+ * asks; wires its scan/clean IPC via `registerIpc()`. Exposed so `index.ts`
+ * can forward its per-category size updates to the launcher window.
+ */
+export const xcodeClean = new XcodeCleanExtension();
 
 /** Live crypto prices for the calculator — a data feed like `ExchangeRateSource`, gated by a setting. */
 const cryptoPriceSource = new CryptoPriceSource();
@@ -158,6 +169,7 @@ const sources: ActionSource[] = [
   calculatorHistory,
   clipboardHistory,
   quitProcess,
+  xcodeClean,
   quicklinkSource,
   new InstalledAppSource(),
   new ExchangeRateSource(),
@@ -250,12 +262,17 @@ export async function query(text: string): Promise<QueryResult> {
     // Actions flagged "Hide in Root Search" are dropped here but still returned
     // for an explicit query below.
     const scores = usage.scores();
+    const groupRank = (group: ActionGroup) => ACTION_GROUP_ORDER.indexOf(group);
     const result = definitions
-      .map((definition) => definition.action)
+      .map(({ action }) => ({
+        ...action,
+        group: action.group ?? defaultActionGroup(action),
+      }))
       .filter((action) => !action.hidden)
       .sort((a, b) => {
-        const pinDelta = (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
-        if (pinDelta) return pinDelta;
+        // Sections first (Pinned, Commands, Applications), then usage within each.
+        const groupDelta = groupRank(a.group) - groupRank(b.group);
+        if (groupDelta) return groupDelta;
         return (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0);
       });
     return { result };
@@ -264,14 +281,19 @@ export async function query(text: string): Promise<QueryResult> {
   const result = definitions
     .map((definition) => {
       const { action } = definition;
-      const match = matchAction(trimmed, action);
+      // Only a static subtitle is searchable; a deferred one (a widget's live
+      // value) isn't resolved yet at query time.
+      const match = matchAction(trimmed, {
+        ...action,
+        subtitle: action.isDeferredSubtitle ? undefined : action.subtitle,
+      });
       const score = match.score + usage.boost(action.id, trimmed);
       return { action, matched: match.match, score };
     })
     .filter((entry) => entry.matched)
     // Best score first; `sort` is stable, so equal scores keep registry order.
     .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.action);
+    .map((entry) => ({ ...entry.action, group: "Results" as const }));
 
   const calculation = evaluate(trimmed);
   return calculation ? { result, calculation } : { result };

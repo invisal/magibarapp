@@ -1,11 +1,13 @@
-import {
-  app,
-  BrowserWindow,
-  clipboard,
-  globalShortcut,
-  ipcMain,
-} from "electron";
+import { registerUpdater } from "./updater";
+import { app, BrowserWindow, clipboard, ipcMain } from "electron";
 import { captureFocusedWindow } from "@extensions/window/main/control/control";
+import {
+  registerHotkey,
+  unregisterHotkey,
+  unregisterAllHotkeys,
+  startHotkeyCapture,
+  stopHotkeyCapture,
+} from "./native/hotkeys";
 import {
   IPC_CHANNELS,
   type CalculatorSettings,
@@ -13,6 +15,7 @@ import {
 } from "../shared/types";
 import {
   quitProcess,
+  xcodeClean,
   actionAliases,
   actionHotkeys,
   clipboardHistory,
@@ -30,6 +33,7 @@ import {
   settings,
 } from "./actions";
 import { QUIT_PROCESS_CHANNELS } from "@extensions/quit-process/shared/types";
+import { XCODE_CLEAN_CHANNELS } from "@extensions/xcode-clean/shared/types";
 import { CLIPBOARD_HISTORY_CHANNELS } from "@extensions/clipboard-history/shared/types";
 import {
   HOTKEY_CHANNELS,
@@ -46,7 +50,7 @@ import {
   hideLauncher,
   showLauncher,
 } from "./window";
-import { createTray } from "./tray";
+import { createTray, refreshTrayMenu } from "./tray";
 
 // The default toggle shortcut (see `DEFAULT_HOTKEY` in `settings/store.ts` for
 // why macOS/Windows differ) can be rebound from Settings; the currently bound
@@ -68,6 +72,9 @@ import { createTray } from "./tray";
 // already-running instance (via the single-instance lock below) reaches
 // `toggleLauncher` without ever asking Electron to grab the key itself.
 const CLI_TOGGLE_FLAG = "--toggle";
+
+/** Reserved hotkey id for the toggle shortcut — distinct from any action id (which are always namespaced, e.g. `cmd:settings`), so it can share the same `registerHotkey` id-space as `actionHotkeys` without colliding. */
+const TOGGLE_HOTKEY_ID = "__toggle__";
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -124,8 +131,7 @@ function toggleLauncher(): void {
  */
 function ensureToggleShortcutRegistered(): void {
   const accelerator = settings.getHotkey();
-  if (globalShortcut.isRegistered(accelerator)) return;
-  if (!globalShortcut.register(accelerator, toggleLauncher)) {
+  if (!registerHotkey(TOGGLE_HOTKEY_ID, accelerator, toggleLauncher)) {
     console.error(`Failed to register global shortcut: ${accelerator}`);
   }
 }
@@ -167,25 +173,21 @@ async function runBoundAction(
   }
 }
 
-/** Registers one action's `globalShortcut`, wired to run it via `runBoundAction`. */
+/** Registers one action's hotkey, wired to run it via `runBoundAction`. */
 function registerActionHotkey(
   actionId: string,
   binding: ActionHotkeyBinding,
 ): boolean {
-  try {
-    return globalShortcut.register(
-      binding.accelerator,
-      () => void runBoundAction(actionId, binding.type),
-    );
-  } catch {
-    return false;
-  }
+  return registerHotkey(
+    actionId,
+    binding.accelerator,
+    () => void runBoundAction(actionId, binding.type),
+  );
 }
 
-/** (Re-)grabs every persisted action hotkey that isn't currently held — see `ensureToggleShortcutRegistered`. */
+/** (Re-)asserts every persisted action hotkey — see `ensureToggleShortcutRegistered`; `registerHotkey` is itself a no-op if nothing lapsed. */
 function ensureActionHotkeysRegistered(): void {
   for (const [actionId, binding] of Object.entries(actionHotkeys.list())) {
-    if (globalShortcut.isRegistered(binding.accelerator)) continue;
     if (!registerActionHotkey(actionId, binding)) {
       console.error(
         `Failed to register hotkey for ${actionId}: ${binding.accelerator}`,
@@ -212,7 +214,7 @@ app.on("second-instance", (_event, argv) => {
 
 app.whenReady().then(() => {
   createLauncherWindow(keepLauncherOpen);
-  createTray(toggleLauncher);
+  createTray(toggleLauncher, () => settings.getHotkey());
   handleCliAction(process.argv);
 
   // Warm every action source now (apps: disk cache, then a background worker run)
@@ -232,6 +234,15 @@ app.whenReady().then(() => {
   // renderer having to re-fetch on its own timer.
   quitProcess.onRefresh((rows) => {
     getLauncherWindow()?.webContents.send(QUIT_PROCESS_CHANNELS.updated, rows);
+  });
+
+  // Push each category's sizes to the launcher window as the native scan
+  // finishes them (Clean Xcode), so its list fills in live.
+  xcodeClean.onScan((snapshot) => {
+    getLauncherWindow()?.webContents.send(
+      XCODE_CLEAN_CHANNELS.updated,
+      snapshot,
+    );
   });
 
   // Each extension wires its own `ipcMain` handlers via `registerIpc()`.
@@ -301,6 +312,8 @@ app.whenReady().then(() => {
     return pinned;
   });
 
+  registerUpdater(getLauncherWindow);
+
   ensureToggleShortcutRegistered();
 
   ipcMain.handle(IPC_CHANNELS.hotkeyGet, () => {
@@ -314,24 +327,44 @@ app.whenReady().then(() => {
     const previous = settings.getHotkey();
     if (accelerator === previous) return { success: true, hotkey: previous };
 
-    globalShortcut.unregister(previous);
-
-    let registered = false;
-    try {
-      registered = globalShortcut.register(accelerator, toggleLauncher);
-    } catch {
-      registered = false;
-    }
+    // `registerHotkey` replaces whatever was previously registered under
+    // `TOGGLE_HOTKEY_ID` internally, so no separate unregister step first.
+    const registered = registerHotkey(
+      TOGGLE_HOTKEY_ID,
+      accelerator,
+      toggleLauncher,
+    );
 
     if (!registered) {
-      // Couldn't grab the new accelerator (bad format, or another app already
-      // holds it) — restore the previous one so the launcher stays reachable.
-      globalShortcut.register(previous, toggleLauncher);
+      // Couldn't grab the new accelerator (bad format, or — on mac/linux,
+      // still `globalShortcut`-backed — another app already holds it) —
+      // restore the previous one so the launcher stays reachable.
+      registerHotkey(TOGGLE_HOTKEY_ID, previous, toggleLauncher);
       return { success: false, hotkey: previous };
     }
 
     settings.setHotkey(accelerator);
+    refreshTrayMenu();
     return { success: true, hotkey: accelerator };
+  });
+
+  // Shared by every shortcut-recorder UI (the toggle row in Settings and
+  // `HotkeyPanel`'s per-action "Set Hotkey…" in the launcher window) — see
+  // the `hotkeyCapture*` doc comment in `shared/types.ts`. Targets whichever
+  // window asked to start capturing; auto-stops if that window goes away
+  // mid-recording so a closed Settings window can never leave the native
+  // hook stuck suppressing `Win`-involving keys system-wide.
+  ipcMain.on(IPC_CHANNELS.hotkeyCaptureStart, (event) => {
+    const sender = event.sender;
+    startHotkeyCapture((accelerator) => {
+      if (sender.isDestroyed()) return;
+      sender.send(IPC_CHANNELS.hotkeyCaptured, accelerator);
+    });
+    sender.once("destroyed", stopHotkeyCapture);
+  });
+
+  ipcMain.on(IPC_CHANNELS.hotkeyCaptureStop, () => {
+    stopHotkeyCapture();
   });
 
   ensureActionHotkeysRegistered();
@@ -351,14 +384,34 @@ app.whenReady().then(() => {
       actionId: string,
       accelerator: string,
       type: ActionHotkeyBinding["type"],
+      force?: boolean,
     ): ActionHotkeySetResult => {
       const previous = actionHotkeys.get(actionId);
       if (accelerator === previous?.accelerator) {
         return { success: true, binding: previous ?? null };
       }
 
-      if (previous) globalShortcut.unregister(previous.accelerator);
+      // The toggle shortcut lives in `settings`, not `actionHotkeys` — never
+      // reassign it here even with `force`, since silently stealing it would
+      // leave the user unable to reopen the launcher by keyboard, with no
+      // obvious way back short of Settings.
+      if (accelerator === settings.getHotkey()) {
+        return { success: false, binding: previous ?? null, reason: "toggle" };
+      }
 
+      const conflictingId = Object.entries(actionHotkeys.list()).find(
+        ([id, binding]) => id !== actionId && binding.accelerator === accelerator,
+      )?.[0];
+      if (conflictingId) {
+        if (!force) {
+          return { success: false, binding: previous ?? null, reason: "conflict" };
+        }
+        unregisterHotkey(conflictingId);
+        actionHotkeys.remove(conflictingId);
+      }
+
+      // `registerActionHotkey` replaces whatever was previously registered
+      // under this `actionId` internally, so no separate unregister step first.
       const binding: ActionHotkeyBinding = { accelerator, type };
       const registered = registerActionHotkey(actionId, binding);
 
@@ -375,8 +428,7 @@ app.whenReady().then(() => {
   );
 
   ipcMain.handle(HOTKEY_CHANNELS.remove, (_event, actionId: string) => {
-    const previous = actionHotkeys.get(actionId);
-    if (previous) globalShortcut.unregister(previous.accelerator);
+    unregisterHotkey(actionId);
     actionHotkeys.remove(actionId);
   });
 
@@ -409,7 +461,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
-  globalShortcut.unregisterAll();
+  unregisterAllHotkeys();
   clipboardHistory.stopPolling();
   quitProcess.stopPolling();
 });
