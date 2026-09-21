@@ -16,6 +16,44 @@ export declare class ClipboardWatcher {
 }
 
 /**
+ * Handle for the background hotkey watcher `start_hotkey_watcher` starts.
+ * Dropping this without calling `stop()` leaks the watcher window, the
+ * keyboard hook, and its message-loop thread for the rest of the process's
+ * life — callers must `stop()` it explicitly (e.g. on app quit).
+ */
+export declare class HotkeyWatcher {
+  /**
+   * Parses and stores `accelerator` under `id`, replacing whatever was
+   * previously registered under that id. Returns `false` only if
+   * `accelerator` doesn't parse (an unmapped key token, or no modifier at
+   * all) — unlike `RegisterHotKey`, there's no "already in use by another
+   * app" failure mode here, since this never asks Windows for exclusive
+   * ownership of the combo; it just watches every keystroke itself.
+   */
+  register(id: string, accelerator: string): boolean
+  /** Idempotent — removing an id that isn't registered is a no-op. */
+  unregister(id: string): void
+  /**
+   * Starts reporting every `Win`-involving keystroke to `callback` as a
+   * captured accelerator string (`"Super"` for a lone tap, `"Super+Space"`
+   * for a combo, …) instead of matching it against registered entries —
+   * for a shortcut-recorder UI, which otherwise has no way to see a `Win`
+   * keystroke at all (see `HookState::capturing`). A key that doesn't
+   * involve `Win` is untouched and keeps reaching the focused window's own
+   * keydown handler exactly as before. Replaces any previous capture
+   * callback if already capturing.
+   */
+  startCapture(callback: ((err: Error | null, arg: string) => any)): void
+  /** Stops capture mode and resumes normal entry-matching. Idempotent. */
+  stopCapture(): void
+  /**
+   * Unhooks, closes the hidden watcher window, and joins its message-loop
+   * thread. Idempotent.
+   */
+  stop(): void
+}
+
+/**
  * Restores a maximized/minimized window, then moves/resizes it so its *visible*
  * frame (see `get_window_rect`) exactly matches `rect` — expanding by the
  * invisible resize border so adjacent tiled windows still sit flush, the way
@@ -150,6 +188,21 @@ export interface StartApp {
  * handle that silently never calls back.
  */
 export declare function startClipboardWatcher(callback: ((err: Error | null, ) => any)): ClipboardWatcher
+
+/**
+ * Starts the global-hotkey watcher: a background thread creates a hidden,
+ * message-only window, installs a system-wide `WH_KEYBOARD_LL` hook on that
+ * thread (required — Windows delivers low-level hook callbacks only to the
+ * thread that installed them, via its message loop), and invokes `callback`
+ * with the registered id whenever a bound accelerator fires. Entries are
+ * registered/unregistered afterward via the returned `HotkeyWatcher`.
+ *
+ * Blocks briefly (microseconds — one window + hook creation) waiting for the
+ * background thread to finish setting up, so a failure can be reported by
+ * returning a watcher whose `hwnd` is already 0 rather than one that
+ * silently never calls back — same contract as `start_clipboard_watcher`.
+ */
+export declare function startHotkeyWatcher(callback: ((err: Error | null, arg: string) => any)): HotkeyWatcher
 
 /**
  * Windows has no equivalent of macOS's Spaces-based fullscreen, so "Toggle

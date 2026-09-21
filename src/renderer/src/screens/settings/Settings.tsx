@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import type { CalculatorSettings, NumberFormatPreference } from "@shared/types";
-import { eventToAccelerator, formatShortcut } from "@renderer/lib/shortcut";
-import { WindowFrame } from "@renderer/shared/ui";
+import {
+  createLoneSuperTapTracker,
+  eventToAccelerator,
+} from "@renderer/lib/shortcut";
+import { ShortcutLabel, WindowFrame } from "@renderer/shared/ui";
 
 function Row({
   title,
@@ -61,9 +64,16 @@ function HotkeyRow() {
   useEffect(() => {
     if (!recording) return;
 
+    // A bare Meta press/release (no other key in between) isn't reachable
+    // through `eventToAccelerator` — it only ever sees the keydown, and a
+    // lone modifier has no accelerator-equivalent "key". Detecting that
+    // needs the keyup too, tracked separately.
+    const tapTracker = createLoneSuperTapTracker();
+
     function onKeyDown(e: KeyboardEvent): void {
       e.preventDefault();
       e.stopPropagation();
+      tapTracker.onKeyDown(e);
       if (e.repeat) return;
 
       if (e.key === "Escape") {
@@ -77,8 +87,46 @@ function HotkeyRow() {
       void applyHotkey(accelerator);
     }
 
+    function onKeyUp(e: KeyboardEvent): void {
+      e.preventDefault();
+      e.stopPropagation();
+      const accelerator = tapTracker.onKeyUp(e);
+      if (accelerator) void applyHotkey(accelerator);
+    }
+
+    // Settings isn't hidden-without-unmounting the way the launcher window
+    // is today, so this can't (yet) leave these `window`-level listeners
+    // stuck the way an orphaned `HotkeyPanel` capture could (see its own
+    // fix) — kept as the same cheap defense-in-depth regardless: if the
+    // window ever goes to the background while recording, treat it as
+    // Escape rather than leaving every key swallowed until the user comes
+    // back and remembers to cancel it themselves.
+    function onVisibilityChange(): void {
+      if (document.hidden) setRecording(false);
+    }
+
     window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    // `Win`-involving keystrokes (a lone tap, or `Win+<key>`) never reach the
+    // listeners above at all — the OS intercepts them before a plain
+    // focused window sees them, the same problem `RegisterHotKey` has for
+    // *registering* one. Native forwarding covers exactly that gap; a key
+    // that doesn't involve `Win` never comes through this channel, only the
+    // ones above, so there's no double-apply between the two paths.
+    window.api.hotkey.captureStart();
+    const unsubscribe = window.api.hotkey.onCaptured((accelerator) => {
+      void applyHotkey(accelerator);
+    });
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.api.hotkey.captureStop();
+      unsubscribe();
+    };
   }, [recording]);
 
   return (
@@ -94,11 +142,13 @@ function HotkeyRow() {
           }}
           className="rounded border border-border px-2 py-1 font-sans text-xs text-foreground-subtle hover:bg-item-hover"
         >
-          {recording
-            ? "Press keys… (Esc to cancel)"
-            : hotkey
-              ? formatShortcut(hotkey)
-              : "…"}
+          {recording ? (
+            "Press keys… (Esc to cancel)"
+          ) : hotkey ? (
+            <ShortcutLabel accelerator={hotkey} />
+          ) : (
+            "…"
+          )}
         </button>
         {error && (
           <span className="max-w-64 text-right text-xs text-red-500">

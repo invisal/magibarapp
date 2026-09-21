@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Footer } from "@renderer/shared/ui";
-import { eventToAccelerator, formatShortcut } from "@renderer/lib/shortcut";
+import { Footer, ShortcutLabel, WindowsKeyIcon } from "@renderer/shared/ui";
+import {
+  createLoneSuperTapTracker,
+  eventToAccelerator,
+  isMac,
+} from "@renderer/lib/shortcut";
 import { iconSrc } from "@renderer/lib/icon";
 import type { LauncherActionType } from "@shared/types";
 
@@ -63,9 +67,16 @@ function HotkeyPanel({
   }
 
   useEffect(() => {
+    // A bare Meta press/release (no other key in between) isn't reachable
+    // through `eventToAccelerator` — it only ever sees the keydown, and a
+    // lone modifier has no accelerator-equivalent "key". Detecting that
+    // needs the keyup too, tracked separately.
+    const tapTracker = createLoneSuperTapTracker();
+
     function onKeyDown(e: KeyboardEvent): void {
       e.preventDefault();
       e.stopPropagation();
+      tapTracker.onKeyDown(e);
       if (e.repeat) return;
 
       if (e.key === "Escape") {
@@ -94,8 +105,51 @@ function HotkeyPanel({
       setPending(candidate);
     }
 
+    function onKeyUp(e: KeyboardEvent): void {
+      e.preventDefault();
+      e.stopPropagation();
+      const candidate = tapTracker.onKeyUp(e);
+      if (!candidate) return;
+      setError(null);
+      setPending(candidate);
+    }
+
+    // The launcher window is only ever hidden (blur-to-hide on a click
+    // away, or after running an action), never unmounted or reloaded — so a
+    // panel left open mid-recording would otherwise never run this effect's
+    // cleanup at all, leaving these `window`-level listeners (which
+    // unconditionally swallow every keydown/keyup while recording) attached
+    // forever: every key stops working, in every window, until the app
+    // restarts, since nothing ever calls `captureStop()` either. Electron
+    // marks a hidden `BrowserWindow`'s page hidden for the Page Visibility
+    // API, so this fires reliably right when that happens — treated the same
+    // as pressing Escape.
+    function onVisibilityChange(): void {
+      if (document.hidden) onCloseRef.current();
+    }
+
     window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    // `Win`-involving keystrokes (a lone tap, or `Win+<key>`) never reach the
+    // listeners above at all — the OS intercepts them before a plain focused
+    // window sees them. Native forwarding covers exactly that gap; a key
+    // that doesn't involve `Win` never comes through this channel, only the
+    // ones above, so there's no double-apply between the two paths.
+    window.api.hotkey.captureStart();
+    const unsubscribe = window.api.hotkey.onCaptured((candidate) => {
+      setError(null);
+      setPending(candidate);
+    });
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.api.hotkey.captureStop();
+      unsubscribe();
+    };
   }, [actionId, actionType]);
 
   const imageSrc = iconSrc(icon);
@@ -119,7 +173,13 @@ function HotkeyPanel({
       </div>
       <div className="flex flex-col items-center justify-center gap-1.5 rounded border border-border bg-input py-5">
         <span className="text-lg text-foreground">
-          {pending ? formatShortcut(pending) : "⌘"}
+          {pending ? (
+            <ShortcutLabel accelerator={pending} />
+          ) : isMac() ? (
+            "⌘"
+          ) : (
+            <WindowsKeyIcon />
+          )}
         </span>
         <span className="text-xs text-foreground-subtle">
           {error ?? (pending ? "Press Enter to confirm" : "Press a key combo…")}

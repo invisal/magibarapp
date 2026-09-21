@@ -10,3 +10,4 @@ export { Footer } from "./Footer";
 export type { ButtonProps, FooterMenuItem, FooterMenuProps } from "./Footer";
 export { Header } from "./Header";
 export { Form, useField } from "./Form";
+export { ShortcutLabel, WindowsKeyIcon } from "./ShortcutLabel";

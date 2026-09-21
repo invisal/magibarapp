@@ -15,10 +15,10 @@ import {
 import { Autocomplete } from "@base-ui/react/autocomplete";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { cn } from "cnfast";
-import { formatShortcut } from "@renderer/lib/shortcut";
 import { iconSrc } from "@renderer/lib/icon";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import { Footer, type FooterMenuItem } from "./Footer";
+import { ShortcutLabel } from "./ShortcutLabel";
 
 /**
  * A full-screen, launcher-style list: a frameless search header, a scrolling
@@ -166,7 +166,7 @@ const Item = forwardRef<HTMLDivElement, ItemProps>(function Item(
         <span className="min-w-0 truncate">{title}</span>
         {shortcut && highlighted ? (
           <kbd className="shrink-0 rounded border border-border px-1.5 py-0.5 font-sans text-xs text-foreground-subtle">
-            {formatShortcut(shortcut)}
+            <ShortcutLabel accelerator={shortcut} />
           </kbd>
         ) : subtitle ? (
           <span className="min-w-0 truncate font-medium text-foreground-subtle">
