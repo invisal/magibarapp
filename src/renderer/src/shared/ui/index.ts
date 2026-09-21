@@ -12,3 +12,6 @@ export type { ButtonProps, FooterMenuItem, FooterMenuProps } from "./Footer";
 export { Header } from "./Header";
 export { Form, useField } from "./Form";
 export { ShortcutLabel, WindowsKeyIcon } from "./ShortcutLabel";
+export { TourCard, TourButton } from "./TourCard";
+export { Keycaps } from "./Keycaps";
+export { onFooterMenuEvent } from "./menu-events";

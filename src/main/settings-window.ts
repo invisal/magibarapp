@@ -6,6 +6,7 @@ import {
   restoredBounds,
 } from "./window-chrome";
 import { settings } from "./actions";
+import { tourEvent } from "./tour/controller";
 
 const WINDOW_WIDTH = 720;
 const WINDOW_HEIGHT = 560;
@@ -22,6 +23,7 @@ export function openSettingsWindow(): void {
     if (settingsWindow.isMinimized()) settingsWindow.restore();
     settingsWindow.show();
     settingsWindow.focus();
+    tourEvent("settings-opened");
     return;
   }
 
@@ -48,7 +50,9 @@ export function openSettingsWindow(): void {
   settingsWindow.once("ready-to-show", () => settingsWindow?.show());
   settingsWindow.on("closed", () => {
     settingsWindow = null;
+    tourEvent("settings-closed");
   });
+  tourEvent("settings-opened");
 
   if (process.env["ELECTRON_RENDERER_URL"]) {
     settingsWindow.loadURL(

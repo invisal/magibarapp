@@ -161,3 +161,21 @@ test("a settings file with an invalid calculator field falls back to defaults", 
   );
   assert.equal(new SettingsStore({ dir }).getGapSize(), 8);
 });
+
+test("onboarding is not completed by default, and completion persists across instances", () => {
+  const first = new SettingsStore({ dir });
+  assert.equal(first.isOnboardingCompleted(), false);
+  first.setOnboardingCompleted(true);
+
+  assert.equal(new SettingsStore({ dir }).isOnboardingCompleted(), true);
+});
+
+test("a settings file saved before onboarding existed reads as not completed", () => {
+  writeFileSync(
+    join(dir, "settings.json"),
+    JSON.stringify({ version: 1, savedAt: 0, gapPx: 12 }),
+  );
+  const settings = new SettingsStore({ dir });
+  assert.equal(settings.isOnboardingCompleted(), false);
+  assert.equal(settings.getGapSize(), 12);
+});

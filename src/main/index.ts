@@ -49,7 +49,19 @@ import {
   hideLauncher,
   showLauncher,
 } from "./window";
-import { createTray, refreshTrayMenu } from "./tray";
+import {
+  createTray,
+  getTrayBounds,
+  refreshTrayMenu,
+  setTrayMenuListeners,
+} from "./tray";
+import { openSettingsWindow } from "./settings-window";
+import {
+  configureTour,
+  registerTourIpc,
+  startTour,
+  tourEvent,
+} from "./tour/controller";
 
 // The default toggle shortcut (see `DEFAULT_HOTKEY` in `settings/store.ts` for
 // why macOS/Windows differ) can be rebound from Settings; the currently bound
@@ -115,6 +127,7 @@ function toggleLauncher(): void {
   // Grab the window the user is in now, before show()/focus() makes it the launcher.
   captureFocusedWindow(launcherHandle(win));
   showLauncher();
+  tourEvent("launcher-shown");
   // Pick up changes since the last run (e.g. apps installed/removed); sources throttle.
   refreshActionSources();
 }
@@ -247,6 +260,17 @@ app.whenReady().then(() => {
   // Each extension wires its own `ipcMain` handlers via `registerIpc()`.
   registerActionSourcesIpc(ipcMain);
   registerWindowControlsIpc();
+  registerTourIpc();
+  configureTour({
+    getTrayBounds,
+    getHotkey: () => settings.getHotkey(),
+    openSettings: openSettingsWindow,
+    markCompleted: () => settings.setOnboardingCompleted(true),
+  });
+  setTrayMenuListeners({
+    onOpen: () => tourEvent("menu-opened"),
+    onClose: () => tourEvent("menu-closed"),
+  });
   // Quicklink's IPC needs the launcher window's own state (pinned,
   // blur-suppression, the window itself), which only `index.ts` owns, so it
   // stays wired here rather than through `registerIpc()`.
@@ -262,8 +286,15 @@ app.whenReady().then(() => {
     aliasOf: (actionId) => actionAliases.get(actionId),
   });
 
-  ipcMain.handle(IPC_CHANNELS.query, (_event, text: string) => {
-    return query(text);
+  ipcMain.handle(IPC_CHANNELS.query, async (_event, text: string) => {
+    const result = await query(text);
+    // The tour's last step: the launcher gave a real answer. A beat of delay
+    // lets the user actually see it before the "you're done" card replaces the hint.
+    const answered =
+      !!result.calculation ||
+      (text.trim().length >= 3 && result.result.length > 0);
+    if (answered) setTimeout(() => tourEvent("search-answered"), 1200);
+    return result;
   });
 
   ipcMain.handle(
@@ -317,7 +348,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle(IPC_CHANNELS.hotkeySet, (_event, accelerator: string) => {
     const previous = settings.getHotkey();
-    if (accelerator === previous) return { success: true, hotkey: previous };
+    if (accelerator === previous) {
+      tourEvent("hotkey-confirmed");
+      return { success: true, hotkey: previous };
+    }
 
     // `registerHotkey` replaces whatever was previously registered under
     // `TOGGLE_HOTKEY_ID` internally, so no separate unregister step first.
@@ -337,6 +371,7 @@ app.whenReady().then(() => {
 
     settings.setHotkey(accelerator);
     refreshTrayMenu();
+    tourEvent("hotkey-confirmed");
     return { success: true, hotkey: accelerator };
   });
 
@@ -360,6 +395,9 @@ app.whenReady().then(() => {
   });
 
   ensureActionHotkeysRegistered();
+
+  // First launch: go straight to the guided tour, which begins at the tray icon.
+  if (!settings.isOnboardingCompleted()) startTour();
 
   ipcMain.handle(
     HOTKEY_CHANNELS.list,

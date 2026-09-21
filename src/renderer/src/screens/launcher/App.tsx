@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { LauncherHostProvider } from "./host";
 import { RouteStackProvider, useRouteStack } from "./router/context";
 import { RouteStackOutlet } from "./router/Outlet";
+import LauncherTour from "./LauncherTour";
 
 /**
  * A bound action hotkey can fire while the launcher window is hidden (that's
@@ -30,6 +31,7 @@ function App() {
       <RouteStackProvider>
         <HotkeyNavigateListener />
         <RouteStackOutlet />
+        <LauncherTour />
       </RouteStackProvider>
     </LauncherHostProvider>
   );

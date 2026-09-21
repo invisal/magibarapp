@@ -228,4 +228,20 @@ export const IPC_CHANNELS = {
   hotkeyCaptureStart: "hotkey:capture-start",
   hotkeyCaptureStop: "hotkey:capture-stop",
   hotkeyCaptured: "hotkey:captured",
+  /** Settings window → main: replay the guided tour. */
+  tourReplay: "tour:replay",
+  /** Any tour card → main: end the tour early. */
+  tourSkip: "tour:skip",
+  /** Any tour card → main: the user pressed the card's own button ("Keep this shortcut", "Finish"). */
+  tourAdvance: "tour:advance",
+  /** Launcher → main: report something the launcher's own UI did that the tour cares about (a `TourEvent`, allow-listed in main). */
+  tourReport: "tour:report",
+  /** Any window ↔ main: read the current `TourState`. */
+  tourGetState: "tour:get-state",
+  /** main → every window: the `TourState` changed. */
+  tourState: "tour:state",
+  /** main → coach overlay: where to draw the ring/callout (a `CoachLayout`). */
+  tourCoachLayout: "tour:coach-layout",
+  /** coach overlay → main: the pointer is over (true) / left (false) the overlay's card, so clicks should / shouldn't pass through. */
+  tourCoachInteractive: "tour:coach-interactive",
 } as const;

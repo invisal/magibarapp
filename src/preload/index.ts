@@ -8,6 +8,7 @@ import {
   type RequestSubtitleOptions,
   type UpdateStatus,
 } from "../shared/types";
+import type { CoachLayout, TourReportEvent, TourState } from "../shared/tour";
 import { quitProcessApi } from "@extensions/quit-process/ipc/preload";
 import { xcodeCleanApi } from "@extensions/xcode-clean/ipc/preload";
 import { calculatorHistoryApi } from "@extensions/calculator-history/ipc/preload";
@@ -63,6 +64,34 @@ const api = {
       return () =>
         ipcRenderer.removeListener(IPC_CHANNELS.hotkeyCaptured, listener);
     },
+  },
+
+  /** The guided tour: every window that draws a piece of it talks to main through this. */
+  tour: {
+    /** Replays the tour (Settings → General). */
+    replay: (): void => ipcRenderer.send(IPC_CHANNELS.tourReplay),
+    skip: (): void => ipcRenderer.send(IPC_CHANNELS.tourSkip),
+    advance: (): void => ipcRenderer.send(IPC_CHANNELS.tourAdvance),
+    /** Launcher only: the Actions menu opened / closed / had an item picked. */
+    report: (event: TourReportEvent): void =>
+      ipcRenderer.send(IPC_CHANNELS.tourReport, event),
+    getState: (): Promise<TourState> =>
+      ipcRenderer.invoke(IPC_CHANNELS.tourGetState),
+    onState: (cb: (state: TourState) => void): (() => void) => {
+      const listener = (_: unknown, state: TourState): void => cb(state);
+      ipcRenderer.on(IPC_CHANNELS.tourState, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.tourState, listener);
+    },
+    /** Coach overlay only. */
+    onCoachLayout: (cb: (layout: CoachLayout) => void): (() => void) => {
+      const listener = (_: unknown, layout: CoachLayout): void => cb(layout);
+      ipcRenderer.on(IPC_CHANNELS.tourCoachLayout, listener);
+      return () =>
+        ipcRenderer.removeListener(IPC_CHANNELS.tourCoachLayout, listener);
+    },
+    /** Coach overlay only: lets the click-through overlay take clicks while the pointer is on its card. */
+    setCoachInteractive: (interactive: boolean): void =>
+      ipcRenderer.send(IPC_CHANNELS.tourCoachInteractive, interactive),
   },
 
   /** Launcher: a deferred-subtitle row rendered (or force-refreshed) — resolves with the fresh subtitle. */

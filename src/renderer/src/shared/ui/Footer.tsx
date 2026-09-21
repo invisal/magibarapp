@@ -13,6 +13,7 @@ import { cn } from "cnfast";
 import { useShortcut } from "@renderer/lib/use-shortcut";
 import { iconSrc } from "@renderer/lib/icon";
 import { ShortcutLabel } from "./ShortcutLabel";
+import { emitFooterMenuEvent } from "./menu-events";
 
 /** A key-combo pill (e.g. ⌘⏎ / Ctrl+Enter). Decorative — hidden from a11y. */
 function Kbd({
@@ -413,6 +414,11 @@ function Menu({
     onOpenChange?.(next);
   };
 
+  // Let the guided tour (or anything else listening) follow the popup.
+  useEffect(() => {
+    emitFooterMenuEvent(open ? "open" : "close");
+  }, [open]);
+
   // Clear the query and disarm any pending confirm on every close path
   // (select / Escape / outside click / ⌘K).
   useEffect(() => {
@@ -566,6 +572,7 @@ function Menu({
       setTrail((path) => [...path, key]);
       setSearch("");
       setArmedId(null);
+      emitFooterMenuEvent("choose");
       return "opened";
     }
     // First hit on a guarded item just arms it — keep the menu open so the
@@ -576,6 +583,7 @@ function Menu({
     }
     setArmedId(null);
     if (!item.keepOpen) setOpen(false);
+    emitFooterMenuEvent("choose");
     item.onSelect();
     return "ran";
   };
@@ -602,6 +610,7 @@ function Menu({
       {!anchor && (
         <Autocomplete.Trigger
           ref={triggerRef}
+          data-tour="actions-trigger"
           className={cn(
             ACTION_BASE,
             open ? "bg-item-hover text-foreground" : "text-foreground-subtle",
