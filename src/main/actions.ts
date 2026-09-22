@@ -2,14 +2,12 @@ import { app } from "electron";
 import type { IpcMain } from "electron";
 import { join } from "node:path";
 import {
-  ACTION_GROUP_ORDER,
-  defaultActionGroup,
-  type ActionGroup,
   type CalculatorSettings,
   type ExecuteResult,
   type QueryResult,
   type RequestSubtitleOptions,
 } from "../shared/types";
+import { applySections } from "./sections.ts";
 import { evaluate } from "./calculator";
 import { matchAction } from "@shared/search";
 import { takePendingNavigate } from "./navigate";
@@ -30,6 +28,7 @@ import { WindowExtension } from "@extensions/window";
 import { Usage } from "./usage/store";
 import { configureActionResolver, configureExtensions } from "@core/base";
 import { GroupExtension } from "@extensions/group";
+import { DraftExtension } from "@extensions/draft";
 import type { ActionDefinition } from "./types";
 import { QuitProcessExtension } from "@extensions/quit-process";
 import { XcodeCleanExtension } from "@extensions/xcode-clean";
@@ -158,11 +157,21 @@ export function updateCalculatorSettings(
 export const quicklinkSource = new QuicklinkSource();
 
 /**
+ * The Drafts extension — the half-filled forms the user backed out of, listed
+ * in the "Drafts" section at the head of the root list. It owns its
+ * `ExtensionStorage` (`<userData>/extensions/draft.json`, keyed `drafts`) and
+ * wires the forms' save/load/clear IPC to it itself, via `registerIpc()`.
+ */
+const draftSource = new DraftExtension();
+
+/**
  * Registry of action sources. Order matters: `query` keeps it, and the
  * stable sort below preserves it among equally-scored results (so built-in
  * commands rank ahead of applications on a tie).
  */
 const sources: ActionSource[] = [
+  // First, so an unfinished form is the first thing offered back.
+  draftSource,
   new BuiltinCommandSource(),
   windowExtension,
   widgetSource,
@@ -255,30 +264,24 @@ export async function query(text: string): Promise<QueryResult> {
     return { ...definition, action: { ...definition.action, keyword: alias } };
   });
 
+  const scores = usage.scores();
   const trimmed = text.trim();
+
   if (!trimmed) {
-    // The root list: pinned actions first, then by how recently/often each has
-    // been used; the stable sort keeps registry order among the (many) ties.
-    // Actions flagged "Hide in Root Search" are dropped here but still returned
-    // for an explicit query below.
-    const scores = usage.scores();
-    const groupRank = (group: ActionGroup) => ACTION_GROUP_ORDER.indexOf(group);
-    const result = definitions
-      .map(({ action }) => ({
-        ...action,
-        group: action.group ?? defaultActionGroup(action),
-      }))
+    // The root list, ranked purely by how recently/often each action has been
+    // used; the stable sort keeps registry order among the (many) ties.
+    // `applySections` then does the sectioning, so ranking and grouping stay
+    // two separate steps. Actions flagged "Hide in Root Search" are dropped
+    // here but still returned for an explicit query below.
+    const ranked = definitions
+      .map(({ action }) => action)
       .filter((action) => !action.hidden)
-      .sort((a, b) => {
-        // Sections first (Pinned, Commands, Applications), then usage within each.
-        const groupDelta = groupRank(a.group) - groupRank(b.group);
-        if (groupDelta) return groupDelta;
-        return (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0);
-      });
-    return { result };
+      .sort((a, b) => (scores.get(b.id) ?? 0) - (scores.get(a.id) ?? 0));
+    // Pinned is a section of its own here, but not in a typed search below.
+    return { result: applySections(ranked, { scores, pinnedSection: true }) };
   }
 
-  const result = definitions
+  const ranked = definitions
     .map((definition) => {
       const { action } = definition;
       // Only a static subtitle is searchable; a deferred one (a widget's live
@@ -293,7 +296,11 @@ export async function query(text: string): Promise<QueryResult> {
     .filter((entry) => entry.matched)
     // Best score first; `sort` is stable, so equal scores keep registry order.
     .sort((a, b) => b.score - a.score)
-    .map((entry) => ({ ...entry.action, group: "Results" as const }));
+    .map((entry) => entry.action);
+
+  // Sectioned like the root list, so a search reads the same way it does —
+  // relevance still decides the order, this only groups it under headings.
+  const result = applySections(ranked, { scores });
 
   const calculation = evaluate(trimmed);
   return calculation ? { result, calculation } : { result };
@@ -306,7 +313,12 @@ export async function executeAction(
 ): Promise<ExecuteResult> {
   await sources.find((source) => source.owns(id))?.execute(id, text, argument);
   // `widget:edit:*` is a UI shortcut (open the editor), not a real action to rank.
-  if (!id.startsWith("widget:edit:")) usage.record(id, text);
+  // Nor is `draft:*`: its ids are recycled as drafts come and go, so a score
+  // would outlive what earned it and land on an unrelated draft — and the
+  // Drafts section is meant to read newest-first, which only holds while every
+  // draft ties at zero and the stable sort leaves `provide()`'s order alone.
+  if (!id.startsWith("widget:edit:") && !id.startsWith("draft:"))
+    usage.record(id, text);
   return { navigate: takePendingNavigate() };
 }
 

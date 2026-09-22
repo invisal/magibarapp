@@ -42,6 +42,9 @@ const APP_DIRS = [
   '/System/Applications',
   '/System/Applications/Utilities',
   '/System/Library/CoreServices/Applications',
+  // Mostly background agents, but Finder lives here — `CORE_SERVICE_APPS` is
+  // what keeps the rest of it out.
+  '/System/Library/CoreServices',
   join(homedir(), 'Applications')
 ]
 
@@ -56,6 +59,15 @@ const APP_ROOTS = [
   '/System/Library/CoreServices/Applications',
   join(homedir(), 'Applications')
 ]
+
+/**
+ * Apps sitting directly in `/System/Library/CoreServices`, which can't be an
+ * app root: it's shared with the agents that make up the desktop itself —
+ * Dock.app, SystemUIServer.app, loginwindow.app — none of which anyone
+ * launches. Finder is the one real application in there, so it's named rather
+ * than matched.
+ */
+const CORE_SERVICE_APPS = new Set(['/System/Library/CoreServices/Finder.app'])
 
 function isInAppRoot(path: string): boolean {
   return APP_ROOTS.some((root) => {
@@ -112,7 +124,7 @@ async function collectAppPaths(): Promise<string[]> {
  */
 function isTopLevelApp(path: string): boolean {
   if (path.includes('.app/')) return false
-  if (!isInAppRoot(path)) return false
+  if (!isInAppRoot(path) && !CORE_SERVICE_APPS.has(path)) return false
   const name = basename(path, '.app')
   return name.length > 0 && !SKIP_NAME_PATTERN.test(name)
 }

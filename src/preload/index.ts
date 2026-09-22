@@ -13,6 +13,7 @@ import { xcodeCleanApi } from "@extensions/xcode-clean/ipc/preload";
 import { calculatorHistoryApi } from "@extensions/calculator-history/ipc/preload";
 import { clipboardHistoryApi } from "@extensions/clipboard-history/ipc/preload";
 import { groupApi } from "@extensions/group/ipc/preload";
+import { draftApi } from "@extensions/draft/ipc/preload";
 import { actionHotkeysApi } from "@extensions/hotkey/ipc/preload";
 import { actionAliasesApi } from "@extensions/alias/ipc/preload";
 import { quicklinkApi } from "@extensions/quicklink/ipc/preload";
@@ -119,6 +120,8 @@ const api = {
 
   /** Group manager screen ↔ main. */
   group: groupApi,
+  /** Unsaved form state, for any form that wants to survive being backed out of. */
+  draft: draftApi,
 
   /** Per-action global hotkeys (Ctrl+K menu's "Set Hotkey…") ↔ main. */
   actionHotkeys: actionHotkeysApi,
