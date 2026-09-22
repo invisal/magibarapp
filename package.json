@@ -1,6 +1,6 @@
 {
   "name": "Magibar",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Simple launcher",
   "main": "./out/main/index.js",
   "private": true,
