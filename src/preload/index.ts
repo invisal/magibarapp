@@ -8,7 +8,6 @@ import {
   type RequestSubtitleOptions,
   type UpdateStatus,
 } from "../shared/types";
-import type { CoachLayout, TourReportEvent, TourState } from "../shared/tour";
 import { quitProcessApi } from "@extensions/quit-process/ipc/preload";
 import { xcodeCleanApi } from "@extensions/xcode-clean/ipc/preload";
 import { calculatorHistoryApi } from "@extensions/calculator-history/ipc/preload";
@@ -42,6 +41,15 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.calculatorSettingsSet, patch),
   },
 
+  /** Settings → General: read / set "Launch at login". */
+  launchAtLogin: {
+    get: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.launchAtLoginGet),
+    /** Resolves with the setting actually in effect (see `setLaunchAtLogin`'s doc comment). */
+    set: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.launchAtLoginSet, enabled),
+  },
+
   /** Settings → General: read / rebind the global toggle shortcut. */
   hotkey: {
     get: (): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.hotkeyGet),
@@ -66,32 +74,22 @@ const api = {
     },
   },
 
-  /** The guided tour: every window that draws a piece of it talks to main through this. */
-  tour: {
+  /** First-run welcome tour ↔ main. */
+  onboarding: {
+    /** Marks the tour done, closes its window and opens the launcher. */
+    finish: (): void => ipcRenderer.send(IPC_CHANNELS.onboardingFinish),
     /** Replays the tour (Settings → General). */
-    replay: (): void => ipcRenderer.send(IPC_CHANNELS.tourReplay),
-    skip: (): void => ipcRenderer.send(IPC_CHANNELS.tourSkip),
-    advance: (): void => ipcRenderer.send(IPC_CHANNELS.tourAdvance),
-    /** Launcher only: the Actions menu opened / closed / had an item picked. */
-    report: (event: TourReportEvent): void =>
-      ipcRenderer.send(IPC_CHANNELS.tourReport, event),
-    getState: (): Promise<TourState> =>
-      ipcRenderer.invoke(IPC_CHANNELS.tourGetState),
-    onState: (cb: (state: TourState) => void): (() => void) => {
-      const listener = (_: unknown, state: TourState): void => cb(state);
-      ipcRenderer.on(IPC_CHANNELS.tourState, listener);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.tourState, listener);
-    },
-    /** Coach overlay only. */
-    onCoachLayout: (cb: (layout: CoachLayout) => void): (() => void) => {
-      const listener = (_: unknown, layout: CoachLayout): void => cb(layout);
-      ipcRenderer.on(IPC_CHANNELS.tourCoachLayout, listener);
+    open: (): void => ipcRenderer.send(IPC_CHANNELS.onboardingOpen),
+    /** Fires whenever the launcher is shown, e.g. by its global shortcut. */
+    onLauncherShown: (cb: () => void): (() => void) => {
+      const listener = (): void => cb();
+      ipcRenderer.on(IPC_CHANNELS.onboardingLauncherShown, listener);
       return () =>
-        ipcRenderer.removeListener(IPC_CHANNELS.tourCoachLayout, listener);
+        ipcRenderer.removeListener(
+          IPC_CHANNELS.onboardingLauncherShown,
+          listener,
+        );
     },
-    /** Coach overlay only: lets the click-through overlay take clicks while the pointer is on its card. */
-    setCoachInteractive: (interactive: boolean): void =>
-      ipcRenderer.send(IPC_CHANNELS.tourCoachInteractive, interactive),
   },
 
   /** Launcher: a deferred-subtitle row rendered (or force-refreshed) — resolves with the fresh subtitle. */

@@ -1,14 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { cn } from "cnfast";
+import { useEffect, useState } from "react";
 import type { CalculatorSettings, NumberFormatPreference } from "@shared/types";
 import { useHotkeyRecorder } from "@renderer/lib/use-hotkey-recorder";
-import { useTour } from "@renderer/lib/use-tour";
-import {
-  ShortcutLabel,
-  TourButton,
-  TourCard,
-  WindowFrame,
-} from "@renderer/shared/ui";
+import { ShortcutLabel, WindowFrame } from "@renderer/shared/ui";
 
 function Row({
   title,
@@ -71,6 +64,35 @@ function HotkeyRow() {
           </span>
         )}
       </div>
+    </Row>
+  );
+}
+
+function LaunchAtLoginRow() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    window.api.launchAtLogin.get().then(setEnabled);
+  }, []);
+
+  async function toggle(next: boolean): Promise<void> {
+    setEnabled(await window.api.launchAtLogin.set(next));
+  }
+
+  return (
+    <Row
+      title="Launch at login"
+      controlId="setting-launch-at-login"
+      description="Start Magibar automatically when you sign in."
+    >
+      <input
+        id="setting-launch-at-login"
+        aria-describedby="setting-launch-at-login-description"
+        type="checkbox"
+        checked={enabled ?? false}
+        disabled={enabled === null}
+        onChange={(e) => void toggle(e.target.checked)}
+      />
     </Row>
   );
 }
@@ -209,114 +231,52 @@ function CalculatorRows() {
   );
 }
 
-/** Fades and freezes everything but the tour's target while a step is asking for one thing. */
-function Dim({ on, children }: { on: boolean; children: ReactNode }) {
-  return (
-    <div
-      aria-hidden={on || undefined}
-      inert={on || undefined}
-      className={cn("transition-opacity duration-300", on && "opacity-25")}
-    >
-      {children}
-    </div>
-  );
-}
-
 function Settings() {
-  const tour = useTour();
-  const focusHotkey = tour?.step === "hotkey";
-
   return (
     <WindowFrame title="Settings" contentClassName="overflow-y-auto">
       <div className="mx-auto w-full max-w-2xl px-6 py-8">
-        <Dim on={focusHotkey}>
-          <h1 className="text-xl font-semibold">Settings</h1>
-          <p className="mt-1 text-sm text-foreground-subtle">
-            Configure how Magibar behaves.
-          </p>
-        </Dim>
+        <h1 className="text-xl font-semibold">Settings</h1>
+        <p className="mt-1 text-sm text-foreground-subtle">
+          Configure how Magibar behaves.
+        </p>
 
         <section className="mt-6">
-          <Dim on={focusHotkey}>
-            <h2 className="text-xs font-medium uppercase tracking-wide text-foreground-subtle">
-              General
-            </h2>
-          </Dim>
-          <div
-            className={cn(
-              "-mx-3 rounded-xl px-3 transition-colors",
-              focusHotkey && "tour-focus",
-            )}
+          <h2 className="text-xs font-medium uppercase tracking-wide text-foreground-subtle">
+            General
+          </h2>
+          <HotkeyRow />
+          <Row
+            title="Show Onboarding"
+            description="Walk through what Magibar can do, step by step."
           >
-            <HotkeyRow />
-          </div>
-          {tour && focusHotkey && (
-            <TourCard
-              step="hotkey"
-              className="mt-4 w-full"
-              arrow={{ side: "top", fromRight: 76 }}
-              title="Choose your launch shortcut"
-              actions={
-                <TourButton onClick={() => window.api.tour.advance()}>
-                  Keep{" "}
-                  <span className="font-sans">
-                    <ShortcutLabel accelerator={tour.hotkey} />
-                  </span>
-                </TourButton>
-              }
+            <button
+              onClick={() => window.api.onboarding.open()}
+              className="rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-item-hover"
             >
-              This key combination opens Magibar from anywhere. Click the
-              highlighted button and press a new combination — or keep the
-              current one.
-            </TourCard>
-          )}
-          <Dim on={focusHotkey}>
-            <Row
-              title="Welcome tour"
-              description="Walk through what Magibar can do, step by step."
-            >
-              <button
-                onClick={() => window.api.tour.replay()}
-                className="rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-item-hover"
-              >
-                Replay
-              </button>
-            </Row>
-            <Row
-              title="Launch at login"
-              controlId="setting-launch-at-login"
-              description="Start Magibar automatically when you sign in."
-            >
-              <input
-                id="setting-launch-at-login"
-                aria-describedby="setting-launch-at-login-description"
-                type="checkbox"
-                disabled
-              />
-            </Row>
-          </Dim>
+              Replay
+            </button>
+          </Row>
+          <LaunchAtLoginRow />
         </section>
 
-        <Dim on={focusHotkey}>
-          <section className="mt-6">
-            <h2 className="text-xs font-medium uppercase tracking-wide text-foreground-subtle">
-              Window Management
-            </h2>
-            {window.api.platform === "darwin" && <AccessibilityRow />}
-            <GapSizeRow />
-          </section>
+        <section className="mt-6">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-foreground-subtle">
+            Window Management
+          </h2>
+          {window.api.platform === "darwin" && <AccessibilityRow />}
+          <GapSizeRow />
+        </section>
 
-          <section className="mt-6">
-            <h2 className="text-xs font-medium uppercase tracking-wide text-foreground-subtle">
-              Calculator
-            </h2>
-            <CalculatorRows />
-          </section>
+        <section className="mt-6">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-foreground-subtle">
+            Calculator
+          </h2>
+          <CalculatorRows />
+        </section>
 
-          <p className="mt-8 text-xs text-foreground-subtle">
-            More options coming soon.
-          </p>
-        </Dim>
+        <p className="mt-8 text-xs text-foreground-subtle">
+          More options coming soon.
+        </p>
       </div>
     </WindowFrame>
   );

@@ -5,9 +5,9 @@ import {
 } from "@renderer/lib/shortcut";
 
 /**
- * State for the "toggle shortcut" recorder in Settings → General: reads the
- * bound accelerator, records a new one on demand and reports why a rebind was
- * refused.
+ * Shared state for the "toggle shortcut" recorder (Settings → General, and the
+ * onboarding tour): reads the bound accelerator, records a new one on demand
+ * and reports why a rebind was refused.
  */
 export function useHotkeyRecorder(): {
   hotkey: string | null;

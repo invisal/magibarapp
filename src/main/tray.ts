@@ -1,4 +1,4 @@
-import { app, Menu, nativeImage, Tray, type Rectangle } from "electron";
+import { app, Menu, nativeImage, Tray } from "electron";
 import trayIconPath from "../../resources/tray-icon.png?asset";
 import trayTemplate1x from "../../resources/tray-iconTemplate.png?asset";
 import trayTemplate2x from "../../resources/tray-iconTemplate@2x.png?asset";
@@ -20,20 +20,6 @@ const isMac = process.platform === "darwin";
 let tray: Tray | null = null;
 let toggle: (() => void) | null = null;
 let getHotkey: (() => string) | null = null;
-let menuListeners: { onOpen: () => void; onClose: () => void } | null = null;
-
-/** Lets the guided tour follow the tray menu opening and closing. */
-export function setTrayMenuListeners(listeners: {
-  onOpen: () => void;
-  onClose: () => void;
-}): void {
-  menuListeners = listeners;
-}
-
-/** The tray icon's on-screen rectangle — zero-sized where the OS doesn't report one. */
-export function getTrayBounds(): Rectangle {
-  return tray?.getBounds() ?? { x: 0, y: 0, width: 0, height: 0 };
-}
 
 /**
  * Builds a template image (black + alpha) from 1x/2x files. macOS tints
@@ -64,7 +50,7 @@ function menuIcon(path1x: string, path2x: string) {
 }
 
 function buildMenu(): Menu {
-  const menu = Menu.buildFromTemplate([
+  return Menu.buildFromTemplate([
     {
       label: "Show Magibar",
       icon: menuIcon(showIcon1x, showIcon2x),
@@ -90,9 +76,6 @@ function buildMenu(): Menu {
       click: () => app.quit(),
     },
   ]);
-  menu.on("menu-will-show", () => menuListeners?.onOpen());
-  menu.on("menu-will-close", () => menuListeners?.onClose());
-  return menu;
 }
 
 /** Rebuilds the tray menu, e.g. after the toggle hotkey changed. */
@@ -118,9 +101,6 @@ export function createTray(
   // Windows/Linux only fire 'click' for the left button — the menu above
   // already handles right-click there, and macOS shows it on either click.
   tray.on("click", toggleLauncher);
-  // Where the menu isn't reported through `menu-will-show` (a right-click on
-  // Windows/Linux), this still tells the tour it was opened.
-  tray.on("right-click", () => menuListeners?.onOpen());
 
   return tray;
 }

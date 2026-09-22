@@ -139,7 +139,7 @@ export default defineConfig({
           index: resolve(__dirname, "src/renderer/index.html"),
           settings: resolve(__dirname, "src/renderer/settings.html"),
           widget: resolve(__dirname, "src/renderer/widget.html"),
-          coach: resolve(__dirname, "src/renderer/coach.html"),
+          onboarding: resolve(__dirname, "src/renderer/onboarding.html"),
         },
       },
     },

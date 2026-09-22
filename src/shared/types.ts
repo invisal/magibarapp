@@ -205,6 +205,9 @@ export const IPC_CHANNELS = {
   /** Settings window ↔ main: read / patch `CalculatorSettings`. */
   calculatorSettingsGet: "settings:calculator-get",
   calculatorSettingsSet: "settings:calculator-set",
+  /** Settings window ↔ main: read / set "Launch at login". */
+  launchAtLoginGet: "settings:launch-at-login-get",
+  launchAtLoginSet: "settings:launch-at-login-set",
   /** Settings window ↔ main: read / rebind the global toggle shortcut. */
   hotkeyGet: "settings:hotkey-get",
   hotkeySet: "settings:hotkey-set",
@@ -228,20 +231,10 @@ export const IPC_CHANNELS = {
   hotkeyCaptureStart: "hotkey:capture-start",
   hotkeyCaptureStop: "hotkey:capture-stop",
   hotkeyCaptured: "hotkey:captured",
-  /** Settings window → main: replay the guided tour. */
-  tourReplay: "tour:replay",
-  /** Any tour card → main: end the tour early. */
-  tourSkip: "tour:skip",
-  /** Any tour card → main: the user pressed the card's own button ("Keep this shortcut", "Finish"). */
-  tourAdvance: "tour:advance",
-  /** Launcher → main: report something the launcher's own UI did that the tour cares about (a `TourEvent`, allow-listed in main). */
-  tourReport: "tour:report",
-  /** Any window ↔ main: read the current `TourState`. */
-  tourGetState: "tour:get-state",
-  /** main → every window: the `TourState` changed. */
-  tourState: "tour:state",
-  /** main → coach overlay: where to draw the ring/callout (a `CoachLayout`). */
-  tourCoachLayout: "tour:coach-layout",
-  /** coach overlay → main: the pointer is over (true) / left (false) the overlay's card, so clicks should / shouldn't pass through. */
-  tourCoachInteractive: "tour:coach-interactive",
+  /** Onboarding window → main: the tour was finished (hides it, marks it done, opens the launcher). */
+  onboardingFinish: "onboarding:finish",
+  /** Settings window → main: replay the tour. */
+  onboardingOpen: "onboarding:open",
+  /** main → onboarding window: the launcher was just shown (the "try the shortcut" step listens for this). */
+  onboardingLauncherShown: "onboarding:launcher-shown",
 } as const;
