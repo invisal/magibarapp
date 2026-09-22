@@ -75,6 +75,8 @@ interface SettingsFile {
   windowBounds?: Partial<Record<WindowBoundsKey, WindowBounds>>;
   /** Electron accelerator string for the global toggle shortcut. Optional — missing means the platform default. */
   hotkey?: string;
+  /** The first-run welcome tour was finished or dismissed. Optional — missing means it hasn't been shown yet. */
+  onboardingCompleted?: boolean;
 }
 
 /** In-memory state — unlike `SettingsFile`, every field is populated (defaulted on load). */
@@ -82,6 +84,7 @@ interface State extends CalculatorSettings {
   gapPx: number;
   windowBounds: Partial<Record<WindowBoundsKey, WindowBounds>>;
   hotkey: string;
+  onboardingCompleted: boolean;
 }
 
 const DEFAULT_CALCULATOR: CalculatorSettings = {
@@ -100,6 +103,7 @@ function emptyState(): State {
     gapPx: DEFAULT_GAP_PX,
     windowBounds: {},
     hotkey: DEFAULT_HOTKEY,
+    onboardingCompleted: false,
     ...DEFAULT_CALCULATOR,
   };
 }
@@ -123,7 +127,9 @@ function isSettingsFile(value: unknown): value is SettingsFile {
             isWindowBounds(bounds),
         ))) &&
     (candidate.hotkey === undefined ||
-      (typeof candidate.hotkey === "string" && candidate.hotkey.length > 0))
+      (typeof candidate.hotkey === "string" && candidate.hotkey.length > 0)) &&
+    (candidate.onboardingCompleted === undefined ||
+      typeof candidate.onboardingCompleted === "boolean")
   );
 }
 
@@ -150,6 +156,7 @@ export class SettingsStore {
           numberFormat: parsed.numberFormat ?? DEFAULT_CALCULATOR.numberFormat,
           windowBounds: parsed.windowBounds ?? {},
           hotkey: parsed.hotkey ?? DEFAULT_HOTKEY,
+          onboardingCompleted: parsed.onboardingCompleted ?? false,
         };
       }
     } catch (error) {
@@ -207,6 +214,19 @@ export class SettingsStore {
     this.persist();
   }
 
+  /** Whether the first-run welcome tour has been finished or dismissed. */
+  isOnboardingCompleted(): boolean {
+    this.init();
+    return this.state.onboardingCompleted;
+  }
+
+  /** Persists immediately. */
+  setOnboardingCompleted(completed: boolean): void {
+    this.init();
+    this.state.onboardingCompleted = completed;
+    this.persist();
+  }
+
   /** The last saved position+size for `key`, or `undefined` if it's never been moved/resized. */
   getWindowBounds(key: WindowBoundsKey): WindowBounds | undefined {
     this.init();
@@ -236,6 +256,7 @@ export class SettingsStore {
       numberFormat: this.state.numberFormat,
       windowBounds: this.state.windowBounds,
       hotkey: this.state.hotkey,
+      onboardingCompleted: this.state.onboardingCompleted,
     };
     try {
       writeFileSync(tmp, JSON.stringify(payload));

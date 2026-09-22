@@ -205,6 +205,9 @@ export const IPC_CHANNELS = {
   /** Settings window ↔ main: read / patch `CalculatorSettings`. */
   calculatorSettingsGet: "settings:calculator-get",
   calculatorSettingsSet: "settings:calculator-set",
+  /** Settings window ↔ main: read / set "Launch at login". */
+  launchAtLoginGet: "settings:launch-at-login-get",
+  launchAtLoginSet: "settings:launch-at-login-set",
   /** Settings window ↔ main: read / rebind the global toggle shortcut. */
   hotkeyGet: "settings:hotkey-get",
   hotkeySet: "settings:hotkey-set",
@@ -228,4 +231,10 @@ export const IPC_CHANNELS = {
   hotkeyCaptureStart: "hotkey:capture-start",
   hotkeyCaptureStop: "hotkey:capture-stop",
   hotkeyCaptured: "hotkey:captured",
+  /** Onboarding window → main: the tour was finished (hides it, marks it done, opens the launcher). */
+  onboardingFinish: "onboarding:finish",
+  /** Settings window → main: replay the tour. */
+  onboardingOpen: "onboarding:open",
+  /** main → onboarding window: the launcher was just shown (the "try the shortcut" step listens for this). */
+  onboardingLauncherShown: "onboarding:launcher-shown",
 } as const;
