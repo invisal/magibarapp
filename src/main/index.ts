@@ -1,5 +1,11 @@
 import { registerUpdater } from "./updater";
-import { app, BrowserWindow, clipboard, ipcMain } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  ipcMain,
+  type WebContents,
+} from "electron";
 import { captureFocusedWindow } from "@extensions/window/main/control/control";
 import {
   registerHotkey,
@@ -32,6 +38,7 @@ import {
   requestSubtitle,
   settings,
 } from "./actions";
+import { isLaunchAtLoginEnabled, setLaunchAtLogin } from "./login-item";
 import { QUIT_PROCESS_CHANNELS } from "@extensions/quit-process/shared/types";
 import { XCODE_CLEAN_CHANNELS } from "@extensions/xcode-clean/shared/types";
 import { CLIPBOARD_HISTORY_CHANNELS } from "@extensions/clipboard-history/shared/types";
@@ -50,6 +57,11 @@ import {
   showLauncher,
 } from "./window";
 import { createTray, refreshTrayMenu } from "./tray";
+import {
+  notifyLauncherShown,
+  openOnboardingWindow,
+  registerOnboardingIpc,
+} from "./onboarding-window";
 
 // The default toggle shortcut (see `DEFAULT_HOTKEY` in `settings/store.ts` for
 // why macOS/Windows differ) can be rebound from Settings; the currently bound
@@ -88,6 +100,35 @@ let pinned = false;
  */
 let suppressAutoHide = false;
 
+/**
+ * The `WebContents` a `'destroyed'` listener is currently attached to for
+ * hotkey-capture auto-stop (see `hotkeyCaptureStart` below) — at most one at
+ * a time, since only one capture session is ever active. Tracked so a clean
+ * stop (Escape, a successful capture, `hotkeyCaptureStop`) can remove its own
+ * listener instead of leaving it attached forever: without this, starting and
+ * stopping capture repeatedly on the same window — e.g. a shortcut-recorder
+ * row a user tries a few times — pegs a fresh `'destroyed'` listener onto that
+ * window's `WebContents` every time, past Node's default max-listeners
+ * warning threshold, even though none of them will ever fire.
+ */
+let hotkeyCaptureSender: WebContents | null = null;
+
+/** The `'destroyed'` handler itself — a stable reference, so `detachHotkeyCaptureSender` can remove exactly the listener `hotkeyCaptureStart` attached. */
+function onHotkeyCaptureSenderDestroyed(): void {
+  stopHotkeyCapture();
+  hotkeyCaptureSender = null;
+}
+
+function detachHotkeyCaptureSender(): void {
+  if (hotkeyCaptureSender && !hotkeyCaptureSender.isDestroyed()) {
+    hotkeyCaptureSender.removeListener(
+      "destroyed",
+      onHotkeyCaptureSenderDestroyed,
+    );
+  }
+  hotkeyCaptureSender = null;
+}
+
 /** Whether the launcher should stay visible on focus loss right now. */
 function keepLauncherOpen(): boolean {
   return pinned || suppressAutoHide;
@@ -115,6 +156,7 @@ function toggleLauncher(): void {
   // Grab the window the user is in now, before show()/focus() makes it the launcher.
   captureFocusedWindow(launcherHandle(win));
   showLauncher();
+  notifyLauncherShown();
   // Pick up changes since the last run (e.g. apps installed/removed); sources throttle.
   refreshActionSources();
 }
@@ -247,6 +289,7 @@ app.whenReady().then(() => {
   // Each extension wires its own `ipcMain` handlers via `registerIpc()`.
   registerActionSourcesIpc(ipcMain);
   registerWindowControlsIpc();
+  registerOnboardingIpc();
   // Quicklink's IPC needs the launcher window's own state (pinned,
   // blur-suppression, the window itself), which only `index.ts` owns, so it
   // stays wired here rather than through `registerIpc()`.
@@ -297,6 +340,11 @@ app.whenReady().then(() => {
     IPC_CHANNELS.calculatorSettingsSet,
     (_event, patch: Partial<CalculatorSettings>) =>
       updateCalculatorSettings(patch),
+  );
+
+  ipcMain.handle(IPC_CHANNELS.launchAtLoginGet, () => isLaunchAtLoginEnabled());
+  ipcMain.handle(IPC_CHANNELS.launchAtLoginSet, (_event, enabled: boolean) =>
+    setLaunchAtLogin(enabled),
   );
 
   ipcMain.handle(IPC_CHANNELS.togglePin, () => {
@@ -352,14 +400,22 @@ app.whenReady().then(() => {
       if (sender.isDestroyed()) return;
       sender.send(IPC_CHANNELS.hotkeyCaptured, accelerator);
     });
-    sender.once("destroyed", stopHotkeyCapture);
+    // A restart (recording, cancelling, recording again) replaces the tracked
+    // sender rather than adding to it — see `hotkeyCaptureSender`'s doc comment.
+    detachHotkeyCaptureSender();
+    hotkeyCaptureSender = sender;
+    sender.once("destroyed", onHotkeyCaptureSenderDestroyed);
   });
 
   ipcMain.on(IPC_CHANNELS.hotkeyCaptureStop, () => {
     stopHotkeyCapture();
+    detachHotkeyCaptureSender();
   });
 
   ensureActionHotkeysRegistered();
+
+  // Last, so the shortcut the tour asks the user to press is already live.
+  if (!settings.isOnboardingCompleted()) openOnboardingWindow();
 
   ipcMain.handle(
     HOTKEY_CHANNELS.list,
@@ -392,11 +448,16 @@ app.whenReady().then(() => {
       }
 
       const conflictingId = Object.entries(actionHotkeys.list()).find(
-        ([id, binding]) => id !== actionId && binding.accelerator === accelerator,
+        ([id, binding]) =>
+          id !== actionId && binding.accelerator === accelerator,
       )?.[0];
       if (conflictingId) {
         if (!force) {
-          return { success: false, binding: previous ?? null, reason: "conflict" };
+          return {
+            success: false,
+            binding: previous ?? null,
+            reason: "conflict",
+          };
         }
         unregisterHotkey(conflictingId);
         actionHotkeys.remove(conflictingId);

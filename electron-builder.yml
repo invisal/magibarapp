@@ -53,6 +53,15 @@ nsis:
   oneClick: true
   perMachine: false
   allowToChangeInstallationDirectory: false
+  # electron-builder's own default for a one-click installer, spelled out so
+  # it's not just an implicit behavior: Magibar launches itself the moment
+  # setup finishes, which is what puts the first-run onboarding window in
+  # front of the user right after install (see `main/onboarding-window.ts`).
+  # There's no equivalent hook for the plain .dmg on macOS — a dmg is a drag-
+  # to-Applications install with no post-install step, so onboarding there
+  # only shows the first time the user opens the app themselves. AppImage on
+  # Linux has no separate "install" step at all — running it IS the first run.
+  runAfterFinish: true
 
 mac:
   category: public.app-category.utilities

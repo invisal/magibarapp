@@ -33,7 +33,11 @@ export const framelessChrome: BrowserWindowConstructorOptions = {
   ...(process.platform === "darwin"
     ? {
         titleBarStyle: "hidden" as const,
-        trafficLightPosition: { x: 16, y: 16 },
+        // Centers the traffic lights in the 36px (`h-9`) title bar `WindowFrame`
+        // draws — measured against the title text's own (correctly centered)
+        // baseline: `y: 16` sits the button cluster ~5px low, most visible
+        // next to a short title like "Welcome to Magibar".
+        trafficLightPosition: { x: 16, y: 11 },
         vibrancy: "under-window" as const,
       }
     : process.platform === "win32"

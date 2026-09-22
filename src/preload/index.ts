@@ -42,6 +42,15 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.calculatorSettingsSet, patch),
   },
 
+  /** Settings → General: read / set "Launch at login". */
+  launchAtLogin: {
+    get: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.launchAtLoginGet),
+    /** Resolves with the setting actually in effect (see `setLaunchAtLogin`'s doc comment). */
+    set: (enabled: boolean): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.launchAtLoginSet, enabled),
+  },
+
   /** Settings → General: read / rebind the global toggle shortcut. */
   hotkey: {
     get: (): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.hotkeyGet),
@@ -63,6 +72,24 @@ const api = {
       ipcRenderer.on(IPC_CHANNELS.hotkeyCaptured, listener);
       return () =>
         ipcRenderer.removeListener(IPC_CHANNELS.hotkeyCaptured, listener);
+    },
+  },
+
+  /** First-run welcome tour ↔ main. */
+  onboarding: {
+    /** Marks the tour done, closes its window and opens the launcher. */
+    finish: (): void => ipcRenderer.send(IPC_CHANNELS.onboardingFinish),
+    /** Replays the tour (Settings → General). */
+    open: (): void => ipcRenderer.send(IPC_CHANNELS.onboardingOpen),
+    /** Fires whenever the launcher is shown, e.g. by its global shortcut. */
+    onLauncherShown: (cb: () => void): (() => void) => {
+      const listener = (): void => cb();
+      ipcRenderer.on(IPC_CHANNELS.onboardingLauncherShown, listener);
+      return () =>
+        ipcRenderer.removeListener(
+          IPC_CHANNELS.onboardingLauncherShown,
+          listener,
+        );
     },
   },
 
