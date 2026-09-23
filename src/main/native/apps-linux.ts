@@ -32,6 +32,7 @@ import type { AppsWorkerResult, ShortcutAppResult } from './apps-worker'
 import {
   desktopFileId,
   isLaunchable,
+  isSettingsPanel,
   parseDesktopEntry,
   parseExecCommand,
   type DesktopEntry
@@ -330,6 +331,62 @@ async function resolveIcon(
   return undefined
 }
 
+/** The GNOME Settings app's icon, used for Settings pages without their own. */
+const SETTINGS_APP_ICON = 'org.gnome.Settings'
+
+/**
+ * `Exec` programs that only launch something else — their name says nothing
+ * about the app, so they're never offered as a search alias.
+ */
+const LAUNCHER_WRAPPERS = new Set([
+  'env',
+  'sh',
+  'bash',
+  'flatpak',
+  'snap',
+  'gio',
+  'gtk-launch',
+  'xdg-open',
+  'pkexec',
+  'python',
+  'python3',
+  'java'
+])
+
+/**
+ * Search terms beyond `Name`, so an app is found by what people actually type:
+ * GNOME's apps are named for their role ("Files", "Text Editor"), but are
+ * searched for by program ("nautilus") or category ("file manager") — which is
+ * what GNOME's own overview matches on too.
+ */
+function searchTerms(
+  id: string,
+  argv: string[],
+  entry: DesktopEntry
+): { altNames: string[]; searchWords: string[] } {
+  const names = new Set<string>()
+  if (entry.genericName) names.add(entry.genericName)
+
+  // A Settings page runs `gnome-control-center <page>` — that's the Settings
+  // app's name, not the page's, and would match every page at once.
+  const program = basename(argv[0])
+  if (!LAUNCHER_WRAPPERS.has(program) && !isSettingsPanel(entry)) names.add(program)
+
+  // Reverse-DNS ids carry the real app name: `org.gnome.Nautilus.desktop`.
+  const stem = id.replace(/\.desktop$/, '')
+  if (stem.includes('.')) names.add(stem.slice(stem.lastIndexOf('.') + 1))
+
+  const lowerTitle = entry.name.toLowerCase()
+  const altNames = [...names].filter((name) => name && name.toLowerCase() !== lowerTitle)
+
+  // Matched per query word, so a multi-word keyword is split up.
+  const searchWords = [
+    ...new Set(entry.keywords.flatMap((keyword) => keyword.toLowerCase().split(/\s+/)))
+  ].filter(Boolean)
+
+  return { altNames, searchWords }
+}
+
 export async function listLinuxApplications(): Promise<AppsWorkerResult> {
   const desktops = currentDesktops()
   const locale = currentLocale()
@@ -347,7 +404,7 @@ export async function listLinuxApplications(): Promise<AppsWorkerResult> {
   /** Desktop file ID → the winning entry. Earlier directories take precedence. */
   const byId = new Map<
     string,
-    { path: string; argv: string[]; entry: DesktopEntry }
+    { id: string; path: string; argv: string[]; entry: DesktopEntry }
   >()
 
   for (const { dir, files } of perDir) {
@@ -371,24 +428,33 @@ export async function listLinuxApplications(): Promise<AppsWorkerResult> {
 
       // Claim the ID even if `TryExec` later rejects it: the user's copy of an
       // entry shadows the system one whether or not it ends up launchable.
-      byId.set(id, { path, argv, entry })
+      byId.set(id, { id, path, argv, entry })
     }
   }
 
   const resolved = await Promise.all(
-    [...byId.values()].map(async ({ path, argv, entry }) => {
+    [...byId.values()].map(async ({ id, path, argv, entry }) => {
       // `TryExec` is the spec's "is this actually installed?" check — a
       // leftover `.desktop` from an uninstalled package still parses fine.
       if (entry.tryExec && !(await resolvesOnPath(entry.tryExec))) return null
+
+      const panel = isSettingsPanel(entry)
+      // Settings pages mostly use symbolic status/device icons the app-icon
+      // index doesn't cover; the Settings app's own icon is the right stand-in.
+      const icon =
+        (await resolveIcon(entry.icon, iconIndex)) ??
+        (panel ? await resolveIcon(SETTINGS_APP_ICON, iconIndex) : undefined)
 
       const shortcut: ShortcutAppResult = {
         kind: 'shortcut',
         path,
         title: entry.name,
-        icon: await resolveIcon(entry.icon, iconIndex),
+        subtitle: panel ? 'Settings' : undefined,
+        icon,
         target: argv[0],
         exec: argv,
-        terminal: entry.terminal
+        terminal: entry.terminal,
+        ...searchTerms(id, argv, entry)
       }
       return shortcut
     })

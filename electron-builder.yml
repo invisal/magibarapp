@@ -86,6 +86,12 @@ linux:
     - AppImage
   category: Utility
   artifactName: ${productName}-${version}-${arch}.${ext}
+  # Run under XWayland: on a Wayland session Electron otherwise picks its
+  # native Wayland backend, where GTK aborts at startup ("Can't create a
+  # GtkStyleContext without a display connection"). The switch has to be on
+  # the command line — app.commandLine.appendSwitch() runs too late for it.
+  executableArgs:
+    - --ozone-platform=x11
 
 # Windows has no codesigning certificate yet, so release.yml ships it
 # unsigned for now (SmartScreen will warn on install) until a cert (or

@@ -36,13 +36,15 @@ export declare class HotkeyWatcher {
   /** Idempotent — removing an id that isn't registered is a no-op. */
   unregister(id: string): void
   /**
-   * No-op — a `media-keys` custom keybinding has no way to observe an
-   * arbitrary keystroke (it only ever runs its command once bound); a
-   * shortcut recorder here relies on the renderer's own DOM listener
-   * instead, same as every other engine that can't do this.
+   * Never reports keystrokes — a `media-keys` custom keybinding has no way
+   * to observe one (it only ever runs its command once bound), so a
+   * shortcut recorder here relies on the renderer's own DOM listener. What
+   * this does do is lift GNOME's modifier+Space shortcuts for the duration
+   * (see `suspend_for_capture`), which would otherwise swallow exactly the
+   * combos a launcher toggle is usually set to before that listener sees them.
    */
   startCapture(callback: ((err: Error | null, arg: string) => any)): void
-  /** No-op counterpart to `start_capture`. */
+  /** Gives back what `start_capture` lifted (see `resume_after_capture`). */
   stopCapture(): void
   /**
    * Stops the worker thread (which also drops the `Trigger` D-Bus service's
