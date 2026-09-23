@@ -42,10 +42,11 @@ async function build(): Promise<OpenWithApp[]> {
   for (const browser of browsers) add(browser.name, browser.path);
   for (const shortcut of appsCache?.shortcuts ?? []) {
     // Windows: only shortcuts whose `.lnk` resolves to an `.exe` are launchable
-    // with an argument. macOS: every `.app` bundle's own path is the target —
-    // there's no separate shortcut-vs-resolved-target distinction.
+    // with an argument. Linux: the `.desktop` file can't take one either, so the
+    // `Exec` program it resolves to is the target. macOS: every `.app` bundle's
+    // own path is the target — no shortcut-vs-resolved-target distinction.
     const launchPath =
-      process.platform === "win32" ? shortcut.target : shortcut.path;
+      process.platform === "darwin" ? shortcut.path : shortcut.target;
     if (launchPath) add(shortcut.title, launchPath, shortcut.icon);
   }
 

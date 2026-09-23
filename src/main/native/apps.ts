@@ -3,9 +3,10 @@ import { execFile } from 'node:child_process'
 import { join } from 'node:path'
 import type { AppsWorkerResult } from './apps-worker'
 import { listMacApplications } from './apps-mac'
+import { listLinuxApplications } from './apps-linux'
 
 /**
- * Native capability: enumerate installed Windows applications and their icons.
+ * Native capability: enumerate installed applications and their icons.
  *
  * The actual resolution happens in apps-worker.ts, spawned as a separate
  * `ELECTRON_RUN_AS_NODE` process — see that file for why. This module just spawns
@@ -47,15 +48,16 @@ function runAppsWorker(): Promise<AppsWorkerResult> {
 
 /**
  * Resolves the current set of installed applications. On Windows this runs off the
- * browser process (see `runAppsWorker`); on macOS it resolves inline, since its
- * enumeration and icon lookups are already async and non-blocking (see apps-mac).
- * Returns `null` on an unsupported platform or a failure, leaving callers to keep
- * their last known-good list.
+ * browser process (see `runAppsWorker`); on macOS and Linux it resolves inline,
+ * since their enumeration and icon lookups are already async and non-blocking
+ * (see apps-mac / apps-linux). Returns `null` on an unsupported platform or a
+ * failure, leaving callers to keep their last known-good list.
  */
 export async function listApplications(): Promise<AppsWorkerResult | null> {
   try {
     if (process.platform === 'win32') return await runAppsWorker()
     if (process.platform === 'darwin') return await listMacApplications()
+    if (process.platform === 'linux') return await listLinuxApplications()
     return null
   } catch (error) {
     console.error('[native] Failed to resolve installed applications:', error)

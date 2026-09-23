@@ -28,8 +28,73 @@ interface CreateQuicklinkProps {
   editId?: string;
   /** Seed every field from this quicklink, but Save creates a new one. */
   duplicateId?: string;
+  /**
+   * Resume the unsaved draft with this id (see `@extensions/draft`) — the
+   * launcher's "Drafts" row reopens the form this way. Wins over `seed`.
+   */
+  draftId?: string;
   onCancel: () => void;
   onCreated: (name: string) => void;
+}
+
+/**
+ * The slice of `FormState` a draft keeps: what the user actually typed, minus
+ * everything re-derivable (the fetched favicon) or purely transient (the app
+ * list, the in-flight flags). Written to and read back from `DraftDef.values`,
+ * which the Drafts extension itself treats as opaque.
+ *
+ * Note the two unrelated senses of "draft" that meet in this file: a
+ * `QuicklinkDraft` is the DTO a *finished* form posts to main, while this is
+ * the *unfinished* form itself, parked for later.
+ */
+type UnsavedFields = Pick<
+  FormState,
+  | "link"
+  | "name"
+  | "nameEdited"
+  | "icon"
+  | "iconEdited"
+  | "openWith"
+  | "tags"
+  | "tagDraft"
+>;
+
+const UNSAVED_KEYS = [
+  "link",
+  "name",
+  "nameEdited",
+  "icon",
+  "iconEdited",
+  "openWith",
+  "tags",
+  "tagDraft",
+] as const satisfies readonly (keyof UnsavedFields)[];
+
+/**
+ * Read `DraftDef.values` back into form fields. Defensive about every field:
+ * the values were serialized by a possibly older build of this form, and a
+ * draft that half-restores is much better than one that throws the screen away.
+ */
+function restoreUnsaved(
+  values: Record<string, unknown>,
+): Partial<UnsavedFields> {
+  const out: Partial<UnsavedFields> = {};
+  if (typeof values.link === "string") out.link = values.link;
+  if (typeof values.name === "string") out.name = values.name;
+  if (typeof values.nameEdited === "boolean")
+    out.nameEdited = values.nameEdited;
+  if (typeof values.icon === "string") out.icon = values.icon;
+  if (typeof values.iconEdited === "boolean")
+    out.iconEdited = values.iconEdited;
+  if (typeof values.openWith === "string") out.openWith = values.openWith;
+  if (typeof values.tagDraft === "string") out.tagDraft = values.tagDraft;
+  if (
+    Array.isArray(values.tags) &&
+    values.tags.every((t) => typeof t === "string")
+  ) {
+    out.tags = values.tags as string[];
+  }
+  return out;
 }
 
 /**
@@ -149,6 +214,7 @@ function CreateQuicklink({
   seed,
   editId,
   duplicateId,
+  draftId,
   onCancel,
   onCreated,
 }: CreateQuicklinkProps) {
@@ -172,11 +238,25 @@ function CreateQuicklink({
     tags: [],
     tagDraft: "",
     apps: [],
-    loading: !!sourceId,
+    loading: !!sourceId || !!draftId,
     saving: false,
     error: null,
   });
   const linkRef = useRef<HTMLTextAreaElement>(null);
+  /**
+   * The draft this form is parked under. Seeded from the `draftId` we resumed
+   * from, and filled in by the first save when we started fresh — a ref, not
+   * state, because only `leave()` reads it and re-rendering on it would be
+   * pointless churn.
+   */
+  const draftRef = useRef<string | undefined>(draftId);
+  /**
+   * The fields as they stood once the form finished loading — a seeded link, or
+   * whatever Duplicate / a resumed draft filled in. `leave()` compares against
+   * it so that opening the form and backing straight out doesn't park a draft
+   * of something the user never actually typed.
+   */
+  const pristineRef = useRef<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -213,6 +293,31 @@ function CreateQuicklink({
       live = false;
     };
   }, [sourceId, duplicateId, setState]);
+
+  // Resuming a draft: same shape as the Edit/Duplicate load above, and equally
+  // one-shot — `draftId` is fixed for the life of this screen.
+  useEffect(() => {
+    if (!draftId) return;
+    let live = true;
+    void window.api.draft.get(draftId).then((draft) => {
+      if (!live) return;
+      setState((d) => {
+        if (draft) Object.assign(d, restoreUnsaved(draft.values));
+        d.loading = false;
+      });
+    });
+    return () => {
+      live = false;
+    };
+  }, [draftId, setState]);
+
+  // Taken once, on the first render where nothing is still loading; the guard
+  // (not a dependency list) is what makes it one-shot, since the fields it
+  // snapshots are exactly the ones that keep changing afterwards.
+  useEffect(() => {
+    if (state.loading || pristineRef.current !== null) return;
+    pristineRef.current = JSON.stringify(UNSAVED_KEYS.map((key) => state[key]));
+  }, [state]);
 
   // `autoFocus` only fires on mount; Edit / Duplicate mount behind a loading
   // screen, so move focus to the Link field once the form is shown.
@@ -316,6 +421,78 @@ function CreateQuicklink({
     };
   }
 
+  /** The fields worth keeping, as the Drafts store's opaque `values` bag. */
+  function unsavedValues(): UnsavedFields {
+    return Object.fromEntries(
+      UNSAVED_KEYS.map((key) => [key, state[key]]),
+    ) as UnsavedFields;
+  }
+
+  /** Has anything changed since the form settled? See `pristineRef`. */
+  function isDirty(): boolean {
+    return (
+      pristineRef.current !== JSON.stringify(UNSAVED_KEYS.map((k) => state[k]))
+    );
+  }
+
+  /**
+   * Is there anything here worth coming back to? `openWith` alone doesn't
+   * count — picking an app and backing out isn't work anyone wants offered
+   * back to them as a draft row.
+   */
+  function hasContent(): boolean {
+    return !!(
+      state.link.trim() ||
+      state.name.trim() ||
+      state.icon.trim() ||
+      state.tags.length ||
+      state.tagDraft.trim()
+    );
+  }
+
+  /** Drop this form's draft, if it has one. Called once it's saved or emptied. */
+  async function discardDraft(): Promise<void> {
+    const id = draftRef.current;
+    if (!id) return;
+    draftRef.current = undefined;
+    await window.api.draft.delete(id);
+  }
+
+  /**
+   * Back out of the form. A half-filled *new* quicklink is parked as a draft on
+   * the way out, so the work comes back as a row in the launcher's "Drafts"
+   * section instead of vanishing.
+   *
+   * Editing is left alone: the quicklink already exists, and backing out of a
+   * change to it shouldn't conjure a second, phantom row.
+   */
+  async function leave(): Promise<void> {
+    if (isEdit) {
+      onCancel();
+      return;
+    }
+    if (!hasContent()) {
+      // Emptied out — if this *was* a resumed draft, it has been abandoned.
+      await discardDraft();
+    } else if (isDirty()) {
+      // Untouched since it loaded is the one case that writes nothing: a
+      // resumed draft stays exactly as it was, ordering included, and a merely
+      // seeded form leaves no trace at all.
+      const parked = await window.api.draft.save({
+        id: draftRef.current,
+        kind: "quicklink",
+        title: effectiveName.trim() || "Untitled Quicklink",
+        subtitle: state.link.trim() || undefined,
+        icon: displayIcon,
+        values: unsavedValues(),
+      });
+      // Moot while `leave()` is immediately followed by unmounting, but it
+      // keeps the ref honest: a first save is where a fresh form gets its id.
+      draftRef.current = parked.id;
+    }
+    onCancel();
+  }
+
   async function save(): Promise<void> {
     if (state.saving) return;
     const d = draftFromState();
@@ -334,6 +511,8 @@ function CreateQuicklink({
       ? await window.api.quicklink.updateQuicklink(editId, d)
       : await window.api.quicklink.createQuicklink(d);
     if (result.ok) {
+      // It exists for real now — the draft has done its job.
+      await discardDraft();
       onCreated(result.name);
       return;
     }
@@ -344,14 +523,14 @@ function CreateQuicklink({
   }
 
   useShortcut({
-    Escape: onCancel,
+    Escape: () => void leave(),
     "CommandOrControl+Enter": state.saving ? undefined : () => void save(),
   });
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <Layout>
-        <Layout.Header title={heading} onBack={onCancel} />
+        <Layout.Header title={heading} onBack={() => void leave()} />
         <Layout.Content className="p-4">
           {state.loading ? (
             <p className="text-sm text-foreground-subtle">Loading…</p>
@@ -504,7 +683,10 @@ function CreateQuicklink({
 
         <Layout.Footer>
           <Layout.Footer.Left>
-            <Layout.Footer.Button shortcut="Escape" onClick={onCancel}>
+            <Layout.Footer.Button
+              shortcut="Escape"
+              onClick={() => void leave()}
+            >
               Cancel
             </Layout.Footer.Button>
           </Layout.Footer.Left>

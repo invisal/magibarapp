@@ -24,11 +24,16 @@ export declare class ClipboardWatcher {
 export declare class HotkeyWatcher {
   /**
    * Parses and stores `accelerator` under `id`, replacing whatever was
-   * previously registered under that id. Returns `false` only if
-   * `accelerator` doesn't parse (an unmapped key token, or no modifier at
-   * all) — unlike `RegisterHotKey`, there's no "already in use by another
-   * app" failure mode here, since this never asks Windows for exclusive
-   * ownership of the combo; it just watches every keystroke itself.
+   * previously registered under that id. Returns `false` if `accelerator`
+   * doesn't parse (an unmapped key token, or no modifier at all), or if a
+   * *different* id already holds the exact same modifiers+key — unlike
+   * `RegisterHotKey`, this never asks Windows for exclusive ownership of the
+   * combo (it just watches, and on a match suppresses, every keystroke
+   * itself), so nothing upstream would ever reject a genuine duplicate on
+   * its own: without this check, `entries` would happily hold two ids for
+   * the same combo, and whichever happened to land first in the list would
+   * silently keep winning every match in `handle_key_event` forever, while
+   * the *other* id's `register()` call reported success anyway.
    */
   register(id: string, accelerator: string): boolean
   /** Idempotent — removing an id that isn't registered is a no-op. */

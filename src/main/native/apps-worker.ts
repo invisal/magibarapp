@@ -33,8 +33,20 @@ export interface ShortcutAppResult {
   path: string
   title: string
   icon?: string
-  /** Resolved target executable, when the `.lnk` points at an `.exe` — used for "Open With". */
+  /**
+   * The executable this entry resolves to, when there is one — used for "Open
+   * With", which has to hand a path or URL to a real program. Windows: the
+   * `.exe` a `.lnk` points at. Linux: the first word of the entry's `Exec`.
+   * macOS has no equivalent; the `.app` bundle path is the target.
+   */
   target?: string
+  /**
+   * Linux: the `.desktop` entry's `Exec` as argv, with field codes stripped —
+   * the fallback `launchLinuxApp` spawns when glib's `gio` isn't installed.
+   */
+  exec?: string[]
+  /** Linux: the entry's `Terminal=true`, meaning it must run inside a terminal emulator. */
+  terminal?: boolean
 }
 
 export interface PackagedAppResult {
