@@ -25,7 +25,9 @@
 
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
+use std::collections::HashMap;
 use std::sync::mpsc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread::JoinHandle;
 use x11rb::connection::Connection;
@@ -361,7 +363,6 @@ pub fn start_clipboard_watcher(callback: ThreadsafeFunction<()>) -> ClipboardWat
 // Same shape as `native/mac/src/lib.rs` and `native/win/src/lib.rs` — see the
 // comment there.
 
-use std::sync::Mutex;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
 /// One process's identity and live resource usage, as reported by the last
@@ -462,3 +463,436 @@ pub fn list_listening_ports() -> Vec<NativePort> {
     })
     .unwrap_or_default()
 }
+
+// -- Global hotkeys via GNOME custom keybindings --
+//
+// Three approaches were tried before this one (see git history for the
+// first two, and `main/index.ts`'s `ensureToggleShortcutRegistered` comment
+// for the underlying constraints): Electron's own `globalShortcut`, a raw
+// `XGrabKey` passive grab, and the `org.freedesktop.portal.GlobalShortcuts`
+// D-Bus portal. All three either can't work at all on this GNOME/Wayland
+// setup (`globalShortcut`/`XGrabKey` — GNOME >= 49 doesn't forward XWayland
+// key grabs to unfocused clients, confirmed against mutter's own issue
+// tracker, same bug that breaks Discord's push-to-talk) or worked
+// inconsistently in practice (the portal bound shortcuts that sat correctly
+// in `dconf` without reliably ever firing `Activated`).
+//
+// This is the one mechanism confirmed end-to-end, by hand, to actually work
+// on this desktop: GNOME's own "custom keyboard shortcut runs a command"
+// feature (Settings -> Keyboard -> Custom Shortcuts), which every GNOME
+// version has supported for years precisely because it's *not* a global key
+// grab at all — `gnome-settings-daemon`'s `media-keys` plugin owns the
+// binding itself (the same mechanism screenshot/volume keys use) and just
+// runs a command when it fires, with none of the app-identity/activation-
+// routing uncertainty the portal has.
+//
+// This module manages one `media-keys` "custom keybinding" dconf entry per
+// registered hotkey id (CRUD via the `gsettings`/`dconf` CLIs — see below
+// for why not a raw D-Bus write) whose command relays back to *this*
+// process. A plain command can't carry which id fired, and only two
+// POSIX real-time-safe user signals exist (nowhere near enough for
+// per-action hotkeys, not just the one toggle shortcut) — so instead this
+// process exposes its own tiny D-Bus service (`HOTKEY_BUS_NAME`) with a
+// single `Trigger(id)` method, and each keybinding's command is a `gdbus
+// call` invoking it with that hotkey's id. `gdbus call` is a lightweight
+// CLI wrapper around a single D-Bus method call — nowhere near the cost of
+// `main/index.ts`'s original relay (spawning an entire second Electron/
+// Chromium process just to have it exit immediately after relaying via
+// `second-instance`), which was the visible "slow to pop up" symptom that
+// led here.
+//
+// CRUD goes through the `gsettings`/`dconf` CLIs rather than a raw D-Bus
+// write to `ca.desrt.dconf.Writer` (which `zbus` — already a dependency —
+// could do directly): dconf's actual wire format for a `Writer.Change` call
+// is its own binary-encoded (GVDB) byte array, not a friendly typed D-Bus
+// argument, and reproducing that encoding correctly isn't worth it when the
+// officially-supported way for a non-GLib program to read/write GSettings
+// *is* shelling out to these CLIs — every desktop integration script doing
+// this does the same.
+
+use std::process::Command;
+
+/// This process's own D-Bus identity for the `Trigger` relay — reverse-DNS
+/// under the same domain as `APP_ID`/`electron-builder.yml`'s `appId`, but
+/// otherwise unrelated to it: unlike the portal this replaced, nothing here
+/// validates this name against an installed `.desktop` file, so there's no
+/// app-identity gotcha to get right this time.
+const HOTKEY_BUS_NAME: &str = "app.magibar.Hotkeys";
+const HOTKEY_OBJECT_PATH: &str = "/app/magibar/Hotkeys";
+const HOTKEY_INTERFACE: &str = "app.magibar.Hotkeys";
+
+const MEDIA_KEYS_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys";
+const CUSTOM_KEYBINDING_SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding";
+const CUSTOM_KEYBINDINGS_BASE: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings";
+
+/// A `[a-z0-9-]`-only rendering of `id`, used both as the `custom-keybindings`
+/// relocatable-schema path segment (`slot_path`) *and* as the argument
+/// embedded in the keybinding's `gdbus call` command (`trigger_command`) —
+/// deterministic rather than allocated, so CRUD needs no persisted id <->
+/// slot mapping of its own for the *dconf* side: the same `id` always maps
+/// to the same slot, and a repeat `register` for that id just overwrites it.
+///
+/// `id` reaches here from `HOTKEY_CHANNELS.set`'s `actionId` (an IPC
+/// argument from the renderer — see `main/index.ts`), not a value this
+/// process fully controls, so it must never be embedded in
+/// `trigger_command`'s shell-parsed command string as-is: GNOME's
+/// `media-keys` plugin runs that string through `g_shell_parse_argv` when
+/// the key fires, and an id containing `'`/`"`/whitespace could break out of
+/// the intended single argument and inject extra `gdbus call` flags —
+/// including a different `--dest`/`--object-path`/`--method`, turning a
+/// pressed hotkey into an arbitrary D-Bus method call under the user's
+/// session. Restricting this rendering to a fixed safe charset closes that
+/// off entirely (and, as a side effect, fixes the same bug's harmless
+/// twin: any `id` containing a plain apostrophe — plausible for a
+/// user-named quicklink/widget — previously broke `gdbus call`'s own
+/// GVariant string-literal parsing outright, just from a typo, not an
+/// attack). The real `id` this slot stands in for is recovered via
+/// `slot_registry` when `HotkeyService::trigger` receives it back.
+fn slot_id(id: &str) -> String {
+  id.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect()
+}
+
+fn slot_path(id: &str) -> String {
+  format!("{CUSTOM_KEYBINDINGS_BASE}/magibar-{}/", slot_id(id))
+}
+
+/// The command a custom keybinding at `slot_path(id)` runs when pressed — a
+/// `gdbus call` relaying `slot_id(id)` (never the raw `id` — see its doc) to
+/// this process's own `Trigger` method (see the module doc for why not a
+/// plain command/signal).
+fn trigger_command(id: &str) -> String {
+  format!(
+    "gdbus call --session --dest {HOTKEY_BUS_NAME} --object-path {HOTKEY_OBJECT_PATH} \
+     --method {HOTKEY_INTERFACE}.Trigger \"'{}'\"",
+    slot_id(id)
+  )
+}
+
+fn gsettings_set(schema_and_path: &str, key: &str, value: &str) -> bool {
+  Command::new("gsettings")
+    .args(["set", schema_and_path, key, value])
+    .status()
+    .map(|status| status.success())
+    .unwrap_or(false)
+}
+
+fn gsettings_get(schema_and_path: &str, key: &str) -> Option<String> {
+  let output = Command::new("gsettings").args(["get", schema_and_path, key]).output().ok()?;
+  if !output.status.success() {
+    return None;
+  }
+  String::from_utf8(output.stdout).ok().map(|s| s.trim().to_string())
+}
+
+/// Parses `gsettings get`'s GVariant text-format output for an `as`
+/// (array-of-strings) key — e.g. `['/a/', '/b/']` or, empty, `@as []` — into
+/// owned strings. Relies on none of this app's own dconf paths ever
+/// containing a literal `'`, true by construction (`slot_path` only ever
+/// produces `[a-z0-9-]` segments).
+fn parse_string_array(raw: &str) -> Vec<String> {
+  raw
+    .split('\'')
+    .enumerate()
+    .filter_map(|(i, s)| (i % 2 == 1).then(|| s.to_string()))
+    .collect()
+}
+
+fn format_string_array(items: &[String]) -> String {
+  format!("[{}]", items.iter().map(|s| format!("'{s}'")).collect::<Vec<_>>().join(", "))
+}
+
+/// Adds `path` to `media-keys`' top-level `custom-keybindings` list (the
+/// registry every relocatable-schema entry under `CUSTOM_KEYBINDINGS_BASE`
+/// must be listed in to actually take effect — an orphaned entry not listed
+/// here is inert). Idempotent.
+fn add_to_custom_keybindings_list(path: &str) -> bool {
+  let current =
+    gsettings_get(MEDIA_KEYS_SCHEMA, "custom-keybindings").map(|s| parse_string_array(&s)).unwrap_or_default();
+  if current.iter().any(|p| p == path) {
+    return true;
+  }
+  let mut updated = current;
+  updated.push(path.to_string());
+  gsettings_set(MEDIA_KEYS_SCHEMA, "custom-keybindings", &format_string_array(&updated))
+}
+
+/// Idempotent counterpart to `add_to_custom_keybindings_list`.
+fn remove_from_custom_keybindings_list(path: &str) -> bool {
+  let current =
+    gsettings_get(MEDIA_KEYS_SCHEMA, "custom-keybindings").map(|s| parse_string_array(&s)).unwrap_or_default();
+  let updated: Vec<String> = current.into_iter().filter(|p| p != path).collect();
+  gsettings_set(MEDIA_KEYS_SCHEMA, "custom-keybindings", &format_string_array(&updated))
+}
+
+/// GTK accelerator syntax (e.g. `"<Control><Alt>space"`) — what a
+/// `media-keys` custom keybinding's `binding` key expects, and conveniently
+/// the same syntax `gtk_accelerator_parse` uses everywhere else in the GNOME
+/// stack — for the same accelerator vocabulary `shortcut.ts`'s
+/// `eventToAccelerator`/`matchesShortcut` produce/accept on Linux
+/// (`Ctrl`/`Alt`/`Shift`/`Super` plus a key token). `None` for no modifier at
+/// all (never valid — a global hotkey needs at least one so it doesn't
+/// collide with normal typing) *or* no real key token: unlike the portal
+/// this replaced, a custom keybinding has no modifier-only-chord
+/// representation (`accelerator == "Super"`, `main/native/hotkeys.ts`'s
+/// `LONE_SUPER_HOTKEY`) — same gap `native/win`'s `RegisterHotKey`-based
+/// fallback would have, just reached by a different platform here.
+fn accelerator_to_binding(accelerator: &str) -> Option<String> {
+  let mut mods = String::new();
+  let mut key: Option<&str> = None;
+  for token in accelerator.split('+').filter(|t| !t.is_empty()) {
+    match token.to_lowercase().as_str() {
+      "commandorcontrol" | "cmdorctrl" | "control" | "ctrl" | "command" | "cmd" => {
+        mods.push_str("<Control>")
+      }
+      "alt" | "option" => mods.push_str("<Alt>"),
+      "shift" => mods.push_str("<Shift>"),
+      "super" | "meta" => mods.push_str("<Super>"),
+      _ => key = Some(token),
+    }
+  }
+  if mods.is_empty() {
+    return None;
+  }
+  keysym_name(key?).map(|k| format!("{mods}{k}"))
+}
+
+/// The X keysym name (`gdk_keyval_name` convention) for one key token of
+/// `shortcut.ts`'s accelerator vocabulary.
+fn keysym_name(token: &str) -> Option<String> {
+  let lower = token.to_lowercase();
+  if let Some(digits) = lower.strip_prefix('f') {
+    if let Ok(n) = digits.parse::<u8>() {
+      if (1..=24).contains(&n) {
+        return Some(format!("F{n}"));
+      }
+    }
+  }
+  if token.chars().count() == 1 {
+    let c = token.chars().next()?;
+    if c.is_ascii_alphanumeric() {
+      return Some(c.to_ascii_lowercase().to_string());
+    }
+    return Some(
+      match c {
+        ',' => "comma",
+        '.' => "period",
+        '/' => "slash",
+        '\\' => "backslash",
+        ';' => "semicolon",
+        '\'' => "apostrophe",
+        '[' => "bracketleft",
+        ']' => "bracketright",
+        '-' => "minus",
+        '=' => "equal",
+        '`' => "grave",
+        _ => return None,
+      }
+      .to_string(),
+    );
+  }
+  Some(
+    match lower.as_str() {
+      "space" => "space",
+      "up" => "Up",
+      "down" => "Down",
+      "left" => "Left",
+      "right" => "Right",
+      "escape" | "esc" => "Escape",
+      "tab" => "Tab",
+      "return" | "enter" => "Return",
+      "backspace" => "BackSpace",
+      "delete" => "Delete",
+      _ => return None,
+    }
+    .to_string(),
+  )
+}
+
+/// Creates (or overwrites) the custom keybinding for `id`: sets its
+/// `name`/`command`/`binding` and makes sure it's listed in the top-level
+/// registry. All four writes are local `gsettings` CLI calls with a
+/// definitive exit code, not an async round trip anywhere — unlike the
+/// portal this replaced, `register()`'s return value is a real,
+/// same-tick "did this actually work" answer.
+fn upsert_custom_keybinding(id: &str, binding: &str) -> bool {
+  let path = slot_path(id);
+  let schema_and_path = format!("{CUSTOM_KEYBINDING_SCHEMA}:{path}");
+  gsettings_set(&schema_and_path, "name", id)
+    && gsettings_set(&schema_and_path, "command", &trigger_command(id))
+    && gsettings_set(&schema_and_path, "binding", binding)
+    && add_to_custom_keybindings_list(&path)
+}
+
+/// Idempotent counterpart to `upsert_custom_keybinding`: unlists `id`'s slot
+/// from the top-level registry and resets its whole dconf subtree (`dconf
+/// reset -f`, not `gsettings reset` — the latter only resets one key at a
+/// time, this needs all three gone).
+fn remove_custom_keybinding(id: &str) -> bool {
+  let path = slot_path(id);
+  let unlisted = remove_from_custom_keybindings_list(&path);
+  let reset = Command::new("dconf")
+    .args(["reset", "-f", &path])
+    .status()
+    .map(|status| status.success())
+    .unwrap_or(false);
+  unlisted && reset
+}
+
+fn hotkey_callback() -> &'static Mutex<Option<ThreadsafeFunction<String>>> {
+  static CALLBACK: OnceLock<Mutex<Option<ThreadsafeFunction<String>>>> = OnceLock::new();
+  CALLBACK.get_or_init(|| Mutex::new(None))
+}
+
+/// `slot_id(id) -> id` for every currently-registered hotkey — both the
+/// source of truth `HotkeyService::trigger` resolves a `Trigger` call's
+/// (sanitized, per `slot_id`'s doc) argument back to the real id through,
+/// and the guard against a `Trigger` call for an id that was just
+/// `unregister`ed (its custom-keybinding CRUD may not have caught up yet —
+/// GNOME's `media-keys` plugin re-reads dconf on its own schedule) firing
+/// anyway.
+fn slot_registry() -> &'static Mutex<HashMap<String, String>> {
+  static REGISTRY: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+  REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The `Trigger` D-Bus service (`HOTKEY_BUS_NAME`/`HOTKEY_INTERFACE`) every
+/// custom keybinding's `gdbus call` invokes — see the module doc. `slot`
+/// is `slot_id(id)`, not `id` itself (see `slot_id`'s doc for why), so the
+/// first thing this does is translate it back.
+struct HotkeyService;
+
+#[zbus::interface(name = "app.magibar.Hotkeys")]
+impl HotkeyService {
+  fn trigger(&self, slot: String) {
+    let Some(id) = slot_registry().lock().unwrap().get(&slot).cloned() else {
+      return;
+    };
+    if let Some(tsfn) = hotkey_callback().lock().unwrap().as_ref() {
+      tsfn.call(Ok(id), ThreadsafeFunctionCallMode::NonBlocking);
+    }
+  }
+}
+
+/// Handle for the background hotkey watcher `start_hotkey_watcher` starts —
+/// mirrors `native/win`/`native/mac`'s `HotkeyWatcher` shape so `main/
+/// native/hotkeys.ts` needs no Linux-specific branch of its own. Owns one
+/// background worker thread that serializes `register`/`unregister` into
+/// `gsettings`/`dconf` CRUD calls and, on the same connection, hosts the
+/// `Trigger` D-Bus service for the life of the process.
+#[napi]
+pub struct HotkeyWatcher {
+  worker_tx: mpsc::Sender<HotkeyCommand>,
+  worker: Option<JoinHandle<()>>,
+}
+
+enum HotkeyCommand {
+  Register(String, String, mpsc::Sender<bool>),
+  Unregister(String),
+  Stop,
+}
+
+#[napi]
+impl HotkeyWatcher {
+  /// Parses `accelerator` and, if it parses, round-trips a CRUD request to
+  /// the worker thread and returns whether every `gsettings`/`dconf` call
+  /// actually succeeded — see `upsert_custom_keybinding`'s doc for why this
+  /// is a real synchronous answer. `false` for an unrepresentable
+  /// accelerator string without even reaching the worker.
+  #[napi]
+  pub fn register(&self, id: String, accelerator: String) -> bool {
+    let Some(binding) = accelerator_to_binding(&accelerator) else {
+      return false;
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    if self.worker_tx.send(HotkeyCommand::Register(id.clone(), binding, reply_tx)).is_err() {
+      return false;
+    }
+    slot_registry().lock().unwrap().insert(slot_id(&id), id);
+    reply_rx.recv().unwrap_or(false)
+  }
+
+  /// Idempotent — removing an id that isn't registered is a no-op.
+  #[napi]
+  pub fn unregister(&self, id: String) {
+    slot_registry().lock().unwrap().remove(&slot_id(&id));
+    let _ = self.worker_tx.send(HotkeyCommand::Unregister(id));
+  }
+
+  /// No-op — a `media-keys` custom keybinding has no way to observe an
+  /// arbitrary keystroke (it only ever runs its command once bound); a
+  /// shortcut recorder here relies on the renderer's own DOM listener
+  /// instead, same as every other engine that can't do this.
+  #[napi]
+  pub fn start_capture(&self, _callback: ThreadsafeFunction<String>) {}
+
+  /// No-op counterpart to `start_capture`.
+  #[napi]
+  pub fn stop_capture(&self) {}
+
+  /// Stops the worker thread (which also drops the `Trigger` D-Bus service's
+  /// connection, releasing `HOTKEY_BUS_NAME`). Deliberately leaves every
+  /// registered custom keybinding in place rather than tearing them down on
+  /// every app quit — they're inert (their `Trigger` call just fails to find
+  /// anything listening) until the app starts again, and re-creating them
+  /// from scratch on every launch would mean a brief window after each
+  /// startup where the user's configured hotkey doesn't work yet. Idempotent.
+  #[napi]
+  pub fn stop(&mut self) {
+    let _ = self.worker_tx.send(HotkeyCommand::Stop);
+    if let Some(thread) = self.worker.take() {
+      let _ = thread.join();
+    }
+    slot_registry().lock().unwrap().clear();
+    *hotkey_callback().lock().unwrap() = None;
+  }
+}
+
+/// Starts the global-hotkey watcher: a background thread opens a D-Bus
+/// session connection, claims `HOTKEY_BUS_NAME`, and hosts `HotkeyService`
+/// on it (serviced automatically by `zbus`'s own internal executor for as
+/// long as the connection stays open — no explicit dispatch loop needed),
+/// then processes `register`/`unregister` calls (relayed from the returned
+/// `HotkeyWatcher`) into `gsettings`/`dconf` CRUD against that same
+/// connection's lifetime.
+#[napi]
+pub fn start_hotkey_watcher(callback: ThreadsafeFunction<String>) -> HotkeyWatcher {
+  *hotkey_callback().lock().unwrap() = Some(callback);
+  slot_registry().lock().unwrap().clear();
+
+  let (worker_tx, worker_rx) = mpsc::channel::<HotkeyCommand>();
+
+  let worker = std::thread::spawn(move || {
+    let conn = match zbus::blocking::Connection::session() {
+      Ok(conn) => conn,
+      Err(error) => {
+        eprintln!("[linux-hotkeys] session bus connect failed: {error}");
+        return;
+      }
+    };
+    if let Err(error) = conn.object_server().at(HOTKEY_OBJECT_PATH, HotkeyService) {
+      eprintln!("[linux-hotkeys] failed to host Trigger service: {error}");
+      return;
+    }
+    if let Err(error) = conn.request_name(HOTKEY_BUS_NAME) {
+      eprintln!("[linux-hotkeys] failed to claim {HOTKEY_BUS_NAME}: {error}");
+      return;
+    }
+
+    for command in worker_rx {
+      match command {
+        HotkeyCommand::Register(id, binding, reply) => {
+          let _ = reply.send(upsert_custom_keybinding(&id, &binding));
+        }
+        HotkeyCommand::Unregister(id) => {
+          remove_custom_keybinding(&id);
+        }
+        HotkeyCommand::Stop => break,
+      }
+    }
+
+    let _ = conn.release_name(HOTKEY_BUS_NAME);
+  });
+
+  HotkeyWatcher { worker_tx, worker: Some(worker) }
+}
+

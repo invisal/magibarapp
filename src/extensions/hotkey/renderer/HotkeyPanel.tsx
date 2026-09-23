@@ -37,7 +37,10 @@ const OVERWRITE_ACCELERATOR = isMac() ? "Command+Return" : "Ctrl+Return";
  * available here), so a conflict message can name what it'd overwrite
  * instead of just showing the raw id. Falls back to the id itself.
  */
-function describeBoundAction(id: string, type: ActionHotkeyBinding["type"]): string {
+function describeBoundAction(
+  id: string,
+  type: ActionHotkeyBinding["type"],
+): string {
   if (type === "application") {
     const match = /\/([^/]+)\.app$/i.exec(id);
     if (match) return match[1];
@@ -101,7 +104,8 @@ function HotkeyPanel({
         (id) => id !== actionId && boundHotkeys[id]?.accelerator === pending,
       )
     : undefined;
-  const hasOverwritableConflict = !isToggleConflict && conflictingId !== undefined;
+  const hasOverwritableConflict =
+    !isToggleConflict && conflictingId !== undefined;
 
   // Read inside `onKeyDown`/`onCaptured` below the same way `pendingRef` is —
   // that effect only runs once per `actionId`/`actionType` (see its own doc
@@ -310,7 +314,9 @@ function HotkeyPanel({
           <Footer.Button
             variant="primary"
             shortcut={hasOverwritableConflict ? undefined : "Enter"}
-            shortcutLabel={hasOverwritableConflict ? overwriteHintLabel : undefined}
+            shortcutLabel={
+              hasOverwritableConflict ? overwriteHintLabel : undefined
+            }
             loading={saving}
             loadingLabel="Saving…"
             disabled={!pending || isToggleConflict}

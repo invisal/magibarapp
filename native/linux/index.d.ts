@@ -17,6 +17,46 @@ export declare class ClipboardWatcher {
 }
 
 /**
+ * Handle for the background hotkey watcher `start_hotkey_watcher` starts —
+ * mirrors `native/win`/`native/mac`'s `HotkeyWatcher` shape so `main/
+ * native/hotkeys.ts` needs no Linux-specific branch of its own. Owns one
+ * background worker thread that serializes `register`/`unregister` into
+ * `gsettings`/`dconf` CRUD calls and, on the same connection, hosts the
+ * `Trigger` D-Bus service for the life of the process.
+ */
+export declare class HotkeyWatcher {
+  /**
+   * Parses `accelerator` and, if it parses, round-trips a CRUD request to
+   * the worker thread and returns whether every `gsettings`/`dconf` call
+   * actually succeeded — see `upsert_custom_keybinding`'s doc for why this
+   * is a real synchronous answer. `false` for an unrepresentable
+   * accelerator string without even reaching the worker.
+   */
+  register(id: string, accelerator: string): boolean
+  /** Idempotent — removing an id that isn't registered is a no-op. */
+  unregister(id: string): void
+  /**
+   * No-op — a `media-keys` custom keybinding has no way to observe an
+   * arbitrary keystroke (it only ever runs its command once bound); a
+   * shortcut recorder here relies on the renderer's own DOM listener
+   * instead, same as every other engine that can't do this.
+   */
+  startCapture(callback: ((err: Error | null, arg: string) => any)): void
+  /** No-op counterpart to `start_capture`. */
+  stopCapture(): void
+  /**
+   * Stops the worker thread (which also drops the `Trigger` D-Bus service's
+   * connection, releasing `HOTKEY_BUS_NAME`). Deliberately leaves every
+   * registered custom keybinding in place rather than tearing them down on
+   * every app quit — they're inert (their `Trigger` call just fails to find
+   * anything listening) until the app starts again, and re-creating them
+   * from scratch on every launch would mean a brief window after each
+   * startup where the user's configured hotkey doesn't work yet. Idempotent.
+   */
+  stop(): void
+}
+
+/**
  * The active window's id, or `0` if none (or the only candidate was `exclude`
  * — the launcher's own X11 window id, so a stray capture of the launcher
  * itself is discarded rather than moved later).
@@ -127,6 +167,17 @@ export interface NativeProcess {
  * that silently never calls back.
  */
 export declare function startClipboardWatcher(callback: ((err: Error | null) => any)): ClipboardWatcher
+
+/**
+ * Starts the global-hotkey watcher: a background thread opens a D-Bus
+ * session connection, claims `HOTKEY_BUS_NAME`, and hosts `HotkeyService`
+ * on it (serviced automatically by `zbus`'s own internal executor for as
+ * long as the connection stays open — no explicit dispatch loop needed),
+ * then processes `register`/`unregister` calls (relayed from the returned
+ * `HotkeyWatcher`) into `gsettings`/`dconf` CRUD against that same
+ * connection's lifetime.
+ */
+export declare function startHotkeyWatcher(callback: ((err: Error | null, arg: string) => any)): HotkeyWatcher
 
 /**
  * Toggles EWMH `_NET_WM_STATE_FULLSCREEN` on the window — broadly supported

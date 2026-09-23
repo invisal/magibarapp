@@ -17,5 +17,20 @@ if (process.platform !== 'linux') {
 }
 
 const { execFileSync } = require('child_process')
+const path = require('path')
 
-execFileSync('napi', ['build', '--platform', ...process.argv.slice(2)], { stdio: 'inherit' })
+// Resolve `napi`'s bin script through Node's own module resolution instead of
+// relying on `napi` being on `PATH` — during npm's own lifecycle-script run
+// (as opposed to a manually PATH-adjusted shell), `PATH` doesn't reliably
+// include the root project's `node_modules/.bin`, which previously made this
+// throw `ENOENT` and silently drop `@magibar/linux` as a failed optional
+// dependency on every plain `npm install`.
+const napiCliPkgPath = require.resolve('@napi-rs/cli/package.json')
+const napiCliPkg = require(napiCliPkgPath)
+const napiCliBin = path.join(path.dirname(napiCliPkgPath), napiCliPkg.bin.napi)
+
+execFileSync(
+  process.execPath,
+  [napiCliBin, 'build', '--platform', ...process.argv.slice(2)],
+  { stdio: 'inherit' },
+)
