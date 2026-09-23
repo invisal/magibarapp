@@ -11,8 +11,20 @@
  * `native/mac/src/lib.rs`: `globalShortcut`/Carbon's `RegisterEventHotKey` has
  * the same two gaps — a combo already claimed by another app never reaches
  * this process at all, and there's no way to represent a modifier-only chord
- * like `Shift+Command`). On Linux, or wherever a platform's native addon fails
- * to load, a thin pass-through to `electron.globalShortcut`.
+ * like `Shift+Command`). On Linux, backed by `@magibar/linux`'s
+ * `HotkeyWatcher` — a GNOME "custom keyboard shortcut runs a command" entry
+ * per hotkey id, managed via the `gsettings`/`dconf` CLIs, whose command
+ * relays back to this process over a small D-Bus service this same module
+ * hosts (see `native/linux/src/lib.rs`'s module doc for the full story,
+ * including why: GNOME hard-reserves the default toggle accelerator at the
+ * compositor level regardless of what's picked, and GNOME >= 49 additionally
+ * stopped forwarding *any* global key grab to XWayland clients at all —
+ * exactly the mechanism `globalShortcut` (and a raw `XGrabKey`, tried first)
+ * relies on, so neither can work there; the `org.freedesktop.portal.
+ * GlobalShortcuts` D-Bus portal was tried after that and bound shortcuts
+ * that sat correctly in `dconf` without reliably ever firing, which is what
+ * led here instead). Wherever a platform's native addon fails to load, a
+ * thin pass-through to `electron.globalShortcut`.
  *
  * Every call site goes through this module only, so nothing outside it needs a
  * `process.platform` branch or a native-addon import of its own — mirrors
@@ -27,12 +39,16 @@ import { globalShortcut } from "electron";
  * literal (never a real `Accelerator` string) is what `SettingsStore`/
  * `HotkeyBindingStore` persist and what the renderer's capture UI produces for
  * a clean tap. Only meaningful on Windows and mac, and only when each
- * platform's native addon is loaded — registering it elsewhere always fails
- * (see `createElectronEngine`'s `register` below).
+ * platform's native addon is loaded — registering it elsewhere (Linux
+ * included: a GNOME custom keybinding has no modifier-only-chord
+ * representation either, same gap as `native/win`'s `RegisterHotKey`-based
+ * fallback would have — see `accelerator_to_binding` in
+ * `native/linux/src/lib.rs`) always fails (see `createElectronEngine`'s
+ * `register` below).
  */
 export const LONE_SUPER_HOTKEY = "Super";
 
-/** The `HotkeyWatcher` instance shape `@magibar/win` and `@magibar/mac` both export. */
+/** The `HotkeyWatcher` instance shape `@magibar/win`, `@magibar/mac`, and `@magibar/linux` all export. */
 interface NativeHotkeyWatcher {
   register(id: string, accelerator: string): boolean;
   unregister(id: string): void;
@@ -41,7 +57,7 @@ interface NativeHotkeyWatcher {
   stop(): void;
 }
 
-/** The module shape `@magibar/win` and `@magibar/mac` both export. */
+/** The module shape `@magibar/win`, `@magibar/mac`, and `@magibar/linux` all export. */
 interface NativeHotkeyModule {
   startHotkeyWatcher(
     callback: (error: Error | null, id: string) => void,
@@ -51,10 +67,11 @@ interface NativeHotkeyModule {
 const nodeRequire = createRequire(import.meta.url);
 let native: NativeHotkeyModule | null | undefined;
 
-/** The native addon name for the current platform, or `null` where none exists (Linux). */
+/** The native addon name for the current platform. */
 function nativeModuleName(): string | null {
   if (process.platform === "win32") return "@magibar/win";
   if (process.platform === "darwin") return "@magibar/mac";
+  if (process.platform === "linux") return "@magibar/linux";
   return null;
 }
 

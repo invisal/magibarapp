@@ -87,6 +87,24 @@ const CLI_TOGGLE_FLAG = "--toggle";
 /** Reserved hotkey id for the toggle shortcut — distinct from any action id (which are always namespaced, e.g. `cmd:settings`), so it can share the same `registerHotkey` id-space as `actionHotkeys` without colliding. */
 const TOGGLE_HOTKEY_ID = "__toggle__";
 
+// Sets this process's Wayland `app_id`/X11 `WM_CLASS` to match the installed
+// `.desktop` file's basename (`app.magibar`, `electron-builder.yml`'s
+// `appId`) — without this, Electron's default identity is derived from
+// `package.json`'s `name` ("Magibar" -> a `magibar` app_id) instead, which
+// is what the systemd scope naming for every launch used to show
+// (`app-magibar-<pid>.scope`, now correctly `app-app.magibar-<pid>.scope`).
+// General Linux desktop integration — correct taskbar/dock icon grouping,
+// alt-tab preview icon, that kind of thing — not tied to any one feature
+// here; earlier this also mattered for `@magibar/linux`'s hotkey watcher
+// (its now-abandoned `org.freedesktop.portal.GlobalShortcuts`-based
+// implementation appeared to key shortcut *activation* routing off this
+// identity matching), but the GNOME-custom-keybinding approach that
+// replaced it doesn't depend on it. Linux-only; a no-op elsewhere. Must run
+// before `app.whenReady()` (and before the single-instance check below, to
+// be safe against any early Electron internals that might read the app_id
+// at `app.requestSingleInstanceLock()` time).
+app.setDesktopName("app.magibar.desktop");
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
@@ -252,6 +270,21 @@ function handleCliAction(argv: string[]): void {
 app.on("second-instance", (_event, argv) => {
   handleCliAction(argv);
 });
+
+// A faster path to the same `toggleLauncher` the GNOME custom-shortcut relay
+// above reaches via `second-instance` — that relay works, but spawning a
+// whole second Electron/Chromium process just to have it immediately exit
+// after relaying its argv (sandbox setup, V8 init, a GPU process spin-up
+// attempt, …) is visibly slow, hundreds of ms to a couple seconds, for what
+// should be an instant toggle. `pkill -SIGUSR1` (or any signal-capable
+// sender) reaching this running process directly skips all of that. Still
+// requires *a* command the GNOME shortcut can run — see `main/index.ts`'s
+// module doc for why nothing shorter (a raw accelerator, `globalShortcut`,
+// the `GlobalShortcuts` portal) can be trusted to fire on its own here.
+// Linux-only: nothing else sends this app `SIGUSR1`.
+if (process.platform === "linux") {
+  process.on("SIGUSR1", toggleLauncher);
+}
 
 app.whenReady().then(() => {
   createLauncherWindow(keepLauncherOpen);

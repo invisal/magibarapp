@@ -700,6 +700,7 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.ClipboardWatcher = nativeBinding.ClipboardWatcher
+module.exports.HotkeyWatcher = nativeBinding.HotkeyWatcher
 module.exports.activeWindow = nativeBinding.activeWindow
 module.exports.applyWindowRect = nativeBinding.applyWindowRect
 module.exports.getWindowRect = nativeBinding.getWindowRect
@@ -708,4 +709,5 @@ module.exports.killProcess = nativeBinding.killProcess
 module.exports.listListeningPorts = nativeBinding.listListeningPorts
 module.exports.listProcesses = nativeBinding.listProcesses
 module.exports.startClipboardWatcher = nativeBinding.startClipboardWatcher
+module.exports.startHotkeyWatcher = nativeBinding.startHotkeyWatcher
 module.exports.toggleFullscreen = nativeBinding.toggleFullscreen
