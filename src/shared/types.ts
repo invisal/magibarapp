@@ -89,6 +89,11 @@ export interface LauncherAction {
   altNames?: string[];
   /** Extra terms this action should also match on (e.g. a quicklink's tags). */
   tags?: string[];
+  /**
+   * Words the action can be found by but that never outrank a name match —
+   * a Linux app's `.desktop` `Keywords` (exact or prefix, per query word).
+   */
+  searchWords?: string[];
   /** Quicklink is pinned — sorts above unpinned actions in the root list. */
   pinned?: boolean;
   /** Quicklink is hidden from the root list (still returned for an explicit search). */

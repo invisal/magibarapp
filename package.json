@@ -7,9 +7,9 @@
   "type": "module",
   "author": "Visal In",
   "scripts": {
-    "dev": "cross-env NO_SANDBOX=1 electron-vite dev",
+    "dev": "cross-env NO_SANDBOX=1 electron-vite dev -- --ozone-platform=x11",
     "build": "electron-vite build",
-    "start": "cross-env NO_SANDBOX=1 electron-vite preview",
+    "start": "cross-env NO_SANDBOX=1 electron-vite preview -- --ozone-platform=x11",
     "dist": "electron-vite build && electron-builder --win",
     "dist:dir": "electron-vite build && electron-builder --win --dir",
     "dist:mac": "electron-vite build && electron-builder --mac",

@@ -19,6 +19,12 @@ export interface DesktopEntry {
   type: string
   /** Localized `Name`, falling back to the unlocalized one. */
   name: string
+  /** Localized `GenericName` — e.g. "Web Browser" for Firefox. */
+  genericName?: string
+  /** Localized `Keywords` — extra search terms the entry asks to be found by. */
+  keywords: string[]
+  /** `Categories` — the menu categories the entry belongs to. */
+  categories: string[]
   /** Raw `Exec` value, field codes and all — pass to `parseExecCommand`. */
   exec?: string
   /** `Icon`: either an absolute path or a themed icon name to look up. */
@@ -178,9 +184,13 @@ export function parseDesktopEntry(
   }
 
   const name = read('Name')
+  const genericName = read('GenericName')?.trim()
   return {
     type: plain.get('Type')?.trim() ?? '',
     name: name ? unescapeValue(name) : '',
+    genericName: genericName ? unescapeValue(genericName) : undefined,
+    keywords: parseList(read('Keywords') ?? '').map(unescapeValue),
+    categories: parseList(plain.get('Categories') ?? ''),
     exec: plain.get('Exec'),
     icon: read('Icon')?.trim() || undefined,
     noDisplay: parseBoolean(plain.get('NoDisplay') ?? ''),
@@ -206,9 +216,19 @@ export function parseDesktopEntry(
  *
  * `TryExec` is *not* checked here — it needs a `PATH` lookup, which is I/O.
  */
+/**
+ * A GNOME Settings page (Wi-Fi, Bluetooth, Displays, …). These are
+ * `NoDisplay=true` so they stay out of the app grid, but GNOME's own search
+ * still finds them — the category is how it tells them apart.
+ */
+export function isSettingsPanel(entry: DesktopEntry): boolean {
+  return entry.categories.includes('X-GNOME-Settings-Panel')
+}
+
 export function isLaunchable(entry: DesktopEntry, desktops: string[]): boolean {
   if (entry.type !== 'Application') return false
-  if (entry.hidden || entry.noDisplay) return false
+  if (entry.hidden) return false
+  if (entry.noDisplay && !isSettingsPanel(entry)) return false
   if (!entry.name || !entry.exec) return false
 
   const current = desktops.map((item) => item.toLowerCase()).filter(Boolean)

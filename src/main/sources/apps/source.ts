@@ -48,8 +48,11 @@ function toActionDefinitions(result: AppsWorkerResult): ActionDefinition[] {
       action: {
         id: `app:${entry.path.toLowerCase()}`,
         title: entry.title,
+        subtitle: entry.subtitle,
         icon: entry.icon,
         type: "application",
+        altNames: entry.altNames,
+        searchWords: entry.searchWords,
       },
       run: async () => {
         // Linux entries are `.desktop` files, and `shell.openPath` on one asks

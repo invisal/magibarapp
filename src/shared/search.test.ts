@@ -280,3 +280,19 @@ test("matchAction: title words and subtitle words can split a query", () => {
 test("matchAction: tags don't match a partial word", () => {
   assert.equal(matchAction("wor", { title: "X", tags: ["work"] }).match, false);
 });
+
+test("matchAction: searchWords surface an action by exact word or prefix", () => {
+  const color = { title: "Color", searchWords: ["display", "printer"] };
+  assert.equal(matchAction("display", color).match, true);
+  assert.equal(matchAction("print", color).match, true);
+  assert.equal(matchAction("isplay", color).match, false);
+});
+
+test("matchAction: a searchWords hit never outranks a title match", () => {
+  const color = { title: "Color", searchWords: ["display"] };
+  const displays = { title: "Displays" };
+  assert.ok(
+    matchAction("display", displays).score >
+      matchAction("display", color).score,
+  );
+});

@@ -66,6 +66,13 @@ const ALT_NAME_EXACT_SCORE = 30;
 /** Charged against a fuzzy alt-name hit so it ranks just under the same hit on the real title. */
 const ALT_NAME_PENALTY = 0.25;
 /**
+ * `searchWords` scores — an app's own `Keywords`. Below any word-start title
+ * hit (1+) so a row whose name matches always wins, but above a subtitle hit:
+ * these are terms the app asked to be found by, a subtitle is just prose.
+ */
+const SEARCH_WORD_EXACT_SCORE = 0.9;
+const SEARCH_WORD_PREFIX_SCORE = 0.7;
+/**
  * Subtitle scores. Deliberately below any decent title hit (a word-start title
  * match is worth 1+), so a description can surface a row but never outrank one
  * whose name matches — yet above a scattered, mid-word title match (≤ 0).
@@ -107,12 +114,15 @@ export function matchAction(
     subtitle?: string;
     keyword?: string;
     tags?: string[];
+    searchWords?: string[];
   },
 ): MatchResult {
   const trimmed = query.trim();
   const tokens = trimmed.split(/\s+/).filter(Boolean);
   const tags = action.tags?.map((tag) => tag.toLowerCase()) ?? [];
   const altNames = action.altNames ?? [];
+  const searchWords =
+    action.searchWords?.map((word) => word.toLowerCase()) ?? [];
 
   let best = fuzzyMatch(trimmed, action.title);
 
@@ -128,6 +138,7 @@ export function matchAction(
     action.subtitle,
     tags,
     altNames,
+    searchWords,
   );
   if (wordsScore !== null && wordsScore > best.score) {
     best = { match: true, score: wordsScore };
@@ -162,6 +173,7 @@ function scoreWords(
   subtitle: string | undefined,
   tags: string[],
   altNames: string[],
+  searchWords: string[],
 ): number | null {
   if (tokens.length === 0) return null;
   const subtitleWords = subtitle ? wordsOf(subtitle) : [];
@@ -180,6 +192,15 @@ function scoreWords(
     }
 
     if (tags.includes(lower)) tokenBest = Math.max(tokenBest, TAG_WORD_SCORE);
+
+    if (searchWords.includes(lower)) {
+      tokenBest = Math.max(tokenBest, SEARCH_WORD_EXACT_SCORE);
+    } else if (
+      token.length >= SUBTITLE_MIN_TOKEN_LENGTH &&
+      searchWords.some((word) => word.startsWith(lower))
+    ) {
+      tokenBest = Math.max(tokenBest, SEARCH_WORD_PREFIX_SCORE);
+    }
 
     if (subtitle && token.length >= SUBTITLE_MIN_TOKEN_LENGTH) {
       if (subtitleWords.some((word) => word.startsWith(lower))) {

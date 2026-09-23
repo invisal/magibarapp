@@ -738,6 +738,225 @@ fn remove_custom_keybinding(id: &str) -> bool {
   unlisted && reset
 }
 
+// GNOME's own shortcuts win over a `media-keys` custom keybinding bound to
+// the same combo — Ubuntu ships `<Alt>space` as `activate-window-menu` and
+// `<Super>space` as `switch-input-source`, so the two most obvious launcher
+// toggles silently never fire. Registering a hotkey therefore also takes the
+// combo away from any system binding holding it ("displacing" it), and gives
+// it back when that hotkey changes or is removed. The same system grab also
+// swallows the keystroke before the Settings recorder's DOM listener ever
+// sees it, so capture temporarily lifts every modifier+Space system binding
+// ("suspending" it) for as long as a recorder is open.
+//
+// What was taken is persisted in dconf (under `MAGIBAR_DCONF_DIR`, a
+// schemaless path — dconf accepts any key there) rather than only in memory:
+// displaced bindings must still be restorable after a restart, and suspended
+// ones after a crash mid-recording (`start_hotkey_watcher` restores those).
+
+/// The GSettings schemas whose `as` keys hold GNOME's system-wide shortcuts.
+const SYSTEM_KEYBINDING_SCHEMAS: &[&str] = &[
+  "org.gnome.desktop.wm.keybindings",
+  "org.gnome.shell.keybindings",
+  "org.gnome.mutter.keybindings",
+  "org.gnome.mutter.wayland.keybindings",
+  "org.gnome.settings-daemon.plugins.media-keys",
+];
+
+const MAGIBAR_DCONF_DIR: &str = "/app/magibar/hotkeys";
+
+/// A system binding taken away from GNOME: `binding` was one entry of
+/// `schema`'s `key` array.
+#[derive(Clone, PartialEq)]
+struct TakenBinding {
+  schema: String,
+  key: String,
+  binding: String,
+}
+
+impl TakenBinding {
+  /// `|`-joined for dconf storage — none of the three ever contain `|` or `'`.
+  fn encode(&self) -> String {
+    format!("{}|{}|{}", self.schema, self.key, self.binding)
+  }
+
+  fn decode(raw: &str) -> Option<Self> {
+    let mut parts = raw.splitn(3, '|');
+    Some(Self {
+      schema: parts.next()?.to_string(),
+      key: parts.next()?.to_string(),
+      binding: parts.next()?.to_string(),
+    })
+  }
+}
+
+/// A GTK accelerator reduced to something comparable: sorted canonical
+/// modifier names plus the lowercased key, so `<Primary><Mod1>Space` and
+/// `<Alt><Control>space` compare equal. `None` for an empty/disabled entry.
+fn normalize_binding(binding: &str) -> Option<(Vec<&'static str>, String)> {
+  let mut rest = binding.trim();
+  let mut mods = Vec::new();
+  while let Some(stripped) = rest.strip_prefix('<') {
+    let end = stripped.find('>')?;
+    let modifier = match stripped[..end].to_lowercase().as_str() {
+      "control" | "ctrl" | "primary" => "control",
+      "alt" | "mod1" => "alt",
+      "super" | "mod4" => "super",
+      "shift" => "shift",
+      "meta" => "meta",
+      "hyper" => "hyper",
+      _ => "other",
+    };
+    mods.push(modifier);
+    rest = &stripped[end + 1..];
+  }
+  if rest.is_empty() {
+    return None;
+  }
+  mods.sort_unstable();
+  mods.dedup();
+  Some((mods, rest.to_lowercase()))
+}
+
+fn same_binding(a: &str, b: &str) -> bool {
+  matches!((normalize_binding(a), normalize_binding(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// A binding the recorder can't see while GNOME holds it: modifier+Space.
+fn is_modifier_space(binding: &str) -> bool {
+  matches!(normalize_binding(binding), Some((mods, key)) if !mods.is_empty() && key == "space")
+}
+
+/// Every `as`-typed key of `schema` with its current entries. String-typed
+/// keys (older `media-keys` versions) are skipped — they can't be edited by
+/// removing one array entry.
+fn array_keys(schema: &str) -> Vec<(String, Vec<String>)> {
+  let Ok(output) = Command::new("gsettings").args(["list-recursively", schema]).output() else {
+    return Vec::new();
+  };
+  if !output.status.success() {
+    return Vec::new();
+  }
+  String::from_utf8_lossy(&output.stdout)
+    .lines()
+    .filter_map(|line| {
+      let mut parts = line.splitn(3, ' ');
+      let (_, key, value) = (parts.next()?, parts.next()?, parts.next()?);
+      let value = value.trim();
+      (value.starts_with('[') || value.starts_with("@as"))
+        .then(|| (key.to_string(), parse_string_array(value)))
+    })
+    .collect()
+}
+
+/// Removes every system binding `matches` accepts from its key, returning
+/// what was removed so it can be given back later.
+fn take_system_bindings(matches: impl Fn(&str) -> bool) -> Vec<TakenBinding> {
+  let mut taken = Vec::new();
+  for schema in SYSTEM_KEYBINDING_SCHEMAS {
+    for (key, entries) in array_keys(schema) {
+      let (removed, kept): (Vec<String>, Vec<String>) = entries.into_iter().partition(|b| matches(b));
+      if removed.is_empty() || !gsettings_set(schema, &key, &format_string_array(&kept)) {
+        continue;
+      }
+      taken.extend(removed.into_iter().map(|binding| TakenBinding {
+        schema: schema.to_string(),
+        key: key.clone(),
+        binding,
+      }));
+    }
+  }
+  taken
+}
+
+/// Gives `taken` back to their keys — appended, and only if the key doesn't
+/// hold that binding again already (the user may have re-added it).
+fn restore_system_bindings(taken: &[TakenBinding]) {
+  for entry in taken {
+    let Some(raw) = gsettings_get(&entry.schema, &entry.key) else { continue };
+    let mut current = parse_string_array(&raw);
+    if current.iter().any(|b| same_binding(b, &entry.binding)) {
+      continue;
+    }
+    current.push(entry.binding.clone());
+    gsettings_set(&entry.schema, &entry.key, &format_string_array(&current));
+  }
+}
+
+fn stored_bindings(name: &str) -> Vec<TakenBinding> {
+  let Ok(output) = Command::new("dconf").args(["read", &format!("{MAGIBAR_DCONF_DIR}/{name}")]).output() else {
+    return Vec::new();
+  };
+  parse_string_array(&String::from_utf8_lossy(&output.stdout)).iter().filter_map(|raw| TakenBinding::decode(raw)).collect()
+}
+
+fn store_bindings(name: &str, taken: &[TakenBinding]) {
+  let path = format!("{MAGIBAR_DCONF_DIR}/{name}");
+  let _ = if taken.is_empty() {
+    Command::new("dconf").args(["reset", &path]).status()
+  } else {
+    let encoded: Vec<String> = taken.iter().map(TakenBinding::encode).collect();
+    Command::new("dconf").args(["write", &path, &format_string_array(&encoded)]).status()
+  };
+}
+
+fn displaced_name(id: &str) -> String {
+  format!("displaced-{}", slot_id(id))
+}
+
+/// Takes `binding` away from every system shortcut holding it, on behalf of
+/// hotkey `id`, adding to what that id already displaced.
+fn displace_for(id: &str, binding: &str) {
+  let mut displaced = stored_bindings(&displaced_name(id));
+  for entry in take_system_bindings(|b| same_binding(b, binding)) {
+    if !displaced.contains(&entry) {
+      displaced.push(entry);
+    }
+  }
+  store_bindings(&displaced_name(id), &displaced);
+}
+
+/// Gives back everything hotkey `id` displaced, except entries for `keep` —
+/// the binding it's about to (re-)take anyway.
+fn release_displaced(id: &str, keep: Option<&str>) {
+  let (kept, released): (Vec<TakenBinding>, Vec<TakenBinding>) = stored_bindings(&displaced_name(id))
+    .into_iter()
+    .partition(|entry| keep.is_some_and(|binding| same_binding(&entry.binding, binding)));
+  restore_system_bindings(&released);
+  store_bindings(&displaced_name(id), &kept);
+}
+
+/// Lifts every modifier+Space system binding while a recorder is open. A
+/// no-op if a suspension is already in effect, so nested starts never
+/// overwrite the record of what to give back.
+fn suspend_for_capture() {
+  if !stored_bindings("suspended").is_empty() {
+    return;
+  }
+  store_bindings("suspended", &take_system_bindings(is_modifier_space));
+}
+
+/// Ends `suspend_for_capture`. A suspended binding that a Magibar hotkey now
+/// uses (the user just recorded Alt+Space) isn't given back to GNOME — it's
+/// moved to that hotkey's displaced list instead, so the new hotkey works.
+fn resume_after_capture(registered: &HashMap<String, String>) {
+  let suspended = stored_bindings("suspended");
+  let mut restore = Vec::new();
+  for entry in suspended {
+    match registered.iter().find(|(_, binding)| same_binding(binding, &entry.binding)) {
+      Some((id, _)) => {
+        let mut displaced = stored_bindings(&displaced_name(id));
+        if !displaced.contains(&entry) {
+          displaced.push(entry);
+        }
+        store_bindings(&displaced_name(id), &displaced);
+      }
+      None => restore.push(entry),
+    }
+  }
+  restore_system_bindings(&restore);
+  store_bindings("suspended", &[]);
+}
+
 fn hotkey_callback() -> &'static Mutex<Option<ThreadsafeFunction<String>>> {
   static CALLBACK: OnceLock<Mutex<Option<ThreadsafeFunction<String>>>> = OnceLock::new();
   CALLBACK.get_or_init(|| Mutex::new(None))
@@ -788,6 +1007,8 @@ pub struct HotkeyWatcher {
 enum HotkeyCommand {
   Register(String, String, mpsc::Sender<bool>),
   Unregister(String),
+  StartCapture,
+  StopCapture,
   Stop,
 }
 
@@ -818,16 +1039,22 @@ impl HotkeyWatcher {
     let _ = self.worker_tx.send(HotkeyCommand::Unregister(id));
   }
 
-  /// No-op — a `media-keys` custom keybinding has no way to observe an
-  /// arbitrary keystroke (it only ever runs its command once bound); a
-  /// shortcut recorder here relies on the renderer's own DOM listener
-  /// instead, same as every other engine that can't do this.
+  /// Never reports keystrokes — a `media-keys` custom keybinding has no way
+  /// to observe one (it only ever runs its command once bound), so a
+  /// shortcut recorder here relies on the renderer's own DOM listener. What
+  /// this does do is lift GNOME's modifier+Space shortcuts for the duration
+  /// (see `suspend_for_capture`), which would otherwise swallow exactly the
+  /// combos a launcher toggle is usually set to before that listener sees them.
   #[napi]
-  pub fn start_capture(&self, _callback: ThreadsafeFunction<String>) {}
+  pub fn start_capture(&self, _callback: ThreadsafeFunction<String>) {
+    let _ = self.worker_tx.send(HotkeyCommand::StartCapture);
+  }
 
-  /// No-op counterpart to `start_capture`.
+  /// Gives back what `start_capture` lifted (see `resume_after_capture`).
   #[napi]
-  pub fn stop_capture(&self) {}
+  pub fn stop_capture(&self) {
+    let _ = self.worker_tx.send(HotkeyCommand::StopCapture);
+  }
 
   /// Stops the worker thread (which also drops the `Trigger` D-Bus service's
   /// connection, releasing `HOTKEY_BUS_NAME`). Deliberately leaves every
@@ -878,17 +1105,41 @@ pub fn start_hotkey_watcher(callback: ThreadsafeFunction<String>) -> HotkeyWatch
       return;
     }
 
+    // A crash mid-recording would otherwise leave GNOME's modifier+Space
+    // shortcuts lifted for good. Nothing is registered yet, so all of them
+    // go back; registering below re-takes any a hotkey actually uses.
+    resume_after_capture(&HashMap::new());
+
+    // id -> binding this process has registered (and displaced for) so far.
+    let mut registered: HashMap<String, String> = HashMap::new();
+
     for command in worker_rx {
       match command {
         HotkeyCommand::Register(id, binding, reply) => {
+          // `register` is re-asserted on every "is it still held?" pass, so
+          // the system-binding scan only runs when the binding is new here.
+          if registered.get(&id) != Some(&binding) {
+            // Also covers a binding displaced by an earlier run for a combo
+            // this id no longer uses.
+            release_displaced(&id, Some(&binding));
+            displace_for(&id, &binding);
+            registered.insert(id.clone(), binding.clone());
+          }
           let _ = reply.send(upsert_custom_keybinding(&id, &binding));
         }
         HotkeyCommand::Unregister(id) => {
           remove_custom_keybinding(&id);
+          release_displaced(&id, None);
+          registered.remove(&id);
         }
+        HotkeyCommand::StartCapture => suspend_for_capture(),
+        HotkeyCommand::StopCapture => resume_after_capture(&registered),
         HotkeyCommand::Stop => break,
       }
     }
+
+    // Quitting mid-recording: give the lifted shortcuts back now.
+    resume_after_capture(&registered);
 
     let _ = conn.release_name(HOTKEY_BUS_NAME);
   });

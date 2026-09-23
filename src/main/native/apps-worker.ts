@@ -32,6 +32,8 @@ export interface ShortcutAppResult {
   kind: 'shortcut'
   path: string
   title: string
+  /** Linux: "Settings" for a GNOME Settings page, telling it apart from an app. */
+  subtitle?: string
   icon?: string
   /**
    * The executable this entry resolves to, when there is one — used for "Open
@@ -47,6 +49,13 @@ export interface ShortcutAppResult {
   exec?: string[]
   /** Linux: the entry's `Terminal=true`, meaning it must run inside a terminal emulator. */
   terminal?: boolean
+  /**
+   * Linux: other names the app goes by — its `GenericName`, executable and
+   * reverse-DNS id stem (Files → "File Manager", "nautilus"). Fuzzy-matched.
+   */
+  altNames?: string[]
+  /** Linux: the entry's `Keywords`, lowercased single words — see `searchWords` on `Action`. */
+  searchWords?: string[]
 }
 
 export interface PackagedAppResult {

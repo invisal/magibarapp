@@ -20,6 +20,8 @@ function entry(overrides: Partial<DesktopEntry> = {}): DesktopEntry {
     hidden: false,
     terminal: false,
     tryExec: undefined,
+    keywords: [],
+    categories: [],
     onlyShowIn: [],
     notShowIn: [],
     ...overrides
@@ -93,6 +95,27 @@ describe('parseDesktopEntry', () => {
       ['[Desktop Entry]', 'Type=Application', 'Name=X', 'Exec=x', 'OnlyShowIn=GNOME;KDE;'].join('\n')
     )
     assert.deepEqual(parsed?.onlyShowIn, ['GNOME', 'KDE'])
+  })
+
+  it('reads localized GenericName and Keywords', () => {
+    const parsed = parseDesktopEntry(
+      [
+        '[Desktop Entry]',
+        'Type=Application',
+        'Name=Files',
+        'Exec=nautilus',
+        'GenericName=File Manager',
+        'GenericName[fr]=Gestionnaire de fichiers',
+        'Keywords=folder;manager;explore;',
+        'Keywords[fr]=dossier;'
+      ].join('\n'),
+      'fr_FR.UTF-8'
+    )
+    assert.equal(parsed?.genericName, 'Gestionnaire de fichiers')
+    assert.deepEqual(parsed?.keywords, ['dossier'])
+    const bare = parseDesktopEntry('[Desktop Entry]\nType=Application\nName=X\nExec=x')
+    assert.deepEqual(bare?.keywords, [])
+    assert.equal(bare?.genericName, undefined)
   })
 
   it('unescapes the spec escape sequences in Name', () => {
@@ -170,6 +193,12 @@ describe('isLaunchable', () => {
   it('rejects Hidden and NoDisplay entries', () => {
     assert.equal(isLaunchable(entry({ hidden: true }), []), false)
     assert.equal(isLaunchable(entry({ noDisplay: true }), []), false)
+  })
+
+  it('accepts a NoDisplay GNOME Settings panel, still honouring Hidden', () => {
+    const panel = { noDisplay: true, categories: ['Settings', 'X-GNOME-Settings-Panel'] }
+    assert.equal(isLaunchable(entry(panel), []), true)
+    assert.equal(isLaunchable(entry({ ...panel, hidden: true }), []), false)
   })
 
   it('rejects an entry with nothing to run or show', () => {

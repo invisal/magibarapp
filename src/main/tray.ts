@@ -49,12 +49,22 @@ function menuIcon(path1x: string, path2x: string) {
   return isMac ? templateImage(path1x, path2x) : undefined;
 }
 
+/**
+ * A display-only shortcut label for a tray item. Omitted on Linux: the tray
+ * menu there is a GTK menu with no accel group, so every accelerator logs a
+ * `gtk_widget_add_accelerator` assertion — and GNOME's AppIndicator tray
+ * doesn't render the label anyway.
+ */
+function menuAccelerator(accelerator: string | undefined) {
+  return process.platform === "linux" ? undefined : accelerator;
+}
+
 function buildMenu(): Menu {
   return Menu.buildFromTemplate([
     {
       label: "Show Magibar",
       icon: menuIcon(showIcon1x, showIcon2x),
-      accelerator: getHotkey?.(),
+      accelerator: menuAccelerator(getHotkey?.()),
       // Display only — the global shortcut is registered separately.
       registerAccelerator: false,
       click: () => toggle?.(),
@@ -63,7 +73,7 @@ function buildMenu(): Menu {
     {
       label: "Settings",
       icon: menuIcon(settingsIcon1x, settingsIcon2x),
-      accelerator: "CommandOrControl+,",
+      accelerator: menuAccelerator("CommandOrControl+,"),
       registerAccelerator: false,
       click: () => openSettingsWindow(),
     },
@@ -71,7 +81,7 @@ function buildMenu(): Menu {
     {
       label: "Quit Magibar",
       icon: menuIcon(quitIcon1x, quitIcon2x),
-      accelerator: "CommandOrControl+Q",
+      accelerator: menuAccelerator("CommandOrControl+Q"),
       registerAccelerator: false,
       click: () => app.quit(),
     },
