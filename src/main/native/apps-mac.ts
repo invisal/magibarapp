@@ -35,7 +35,7 @@ const ICON_CONCURRENCY = 6
 
 const SKIP_NAME_PATTERN = /uninstall|read ?me|^help$/i
 
-/** Directories scanned when Spotlight is unavailable (indexing disabled, etc.). */
+/** Directories walked on every scan, alongside Spotlight — see `collectAppPaths`. */
 const APP_DIRS = [
   '/Applications',
   '/Applications/Utilities',
@@ -78,43 +78,59 @@ function isInAppRoot(path: string): boolean {
 }
 
 /**
- * Every installed `.app` bundle path. Prefers Spotlight — one call, catches apps
- * in non-standard locations — and falls back to walking the known app folders.
+ * Every installed `.app` bundle path, from Spotlight *and* a walk of the known
+ * app folders — both every time, not one as a fallback for the other.
+ *
+ * Spotlight alone catches apps in non-standard locations, but it can come back
+ * healthy-looking and still be incomplete: `/System/Library/CoreServices` (where
+ * Finder lives) is exactly the kind of path that ends up unindexed — indexing
+ * switched off for the system volume, a privacy-list entry, a machine still
+ * rebuilding its index after an update. That yields ~300 apps minus Finder, so a
+ * fallback conditioned on Spotlight returning *nothing* never fires and the
+ * missing app stays missing.
+ *
+ * The walk is one `readdir` per `APP_DIRS` entry, so running it unconditionally
+ * is cheap insurance, and `isTopLevelApp` already drops the background agents it
+ * drags in from `/System/Library/CoreServices` alongside Finder.
  */
 async function collectAppPaths(): Promise<string[]> {
-  const paths = new Set<string>()
+  const [indexed, scanned] = await Promise.all([spotlightAppPaths(), scanAppDirs()])
+  return [...new Set([...indexed, ...scanned])]
+}
 
+/** `.app` bundles Spotlight knows about; empty if it fails or indexing is off. */
+async function spotlightAppPaths(): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync(
       'mdfind',
       ["kMDItemContentType == 'com.apple.application-bundle'"],
       { maxBuffer: 16 * 1024 * 1024 }
     )
-    for (const line of stdout.split('\n')) {
-      const trimmed = line.trim()
-      if (trimmed.endsWith('.app')) paths.add(trimmed)
-    }
+    return stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.endsWith('.app'))
   } catch (error) {
-    console.error('[apps-mac] mdfind failed, falling back to directory scan:', error)
+    console.error('[apps-mac] mdfind failed, relying on the directory scan:', error)
+    return []
   }
+}
 
-  if (paths.size === 0) {
-    const scans = await Promise.all(
-      APP_DIRS.map(async (dir) => {
-        try {
-          const entries = await readdir(dir, { withFileTypes: true })
-          return entries
-            .filter((entry) => entry.name.endsWith('.app'))
-            .map((entry) => join(dir, entry.name))
-        } catch {
-          return []
-        }
-      })
-    )
-    for (const path of scans.flat()) paths.add(path)
-  }
-
-  return [...paths]
+/** `.app` bundles sitting directly in an `APP_DIRS` folder; unreadable folders are skipped. */
+async function scanAppDirs(): Promise<string[]> {
+  const scans = await Promise.all(
+    APP_DIRS.map(async (dir) => {
+      try {
+        const entries = await readdir(dir, { withFileTypes: true })
+        return entries
+          .filter((entry) => entry.name.endsWith('.app'))
+          .map((entry) => join(dir, entry.name))
+      } catch {
+        return []
+      }
+    })
+  )
+  return scans.flat()
 }
 
 /**

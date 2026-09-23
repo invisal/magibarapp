@@ -2,12 +2,14 @@ import { shell } from "electron";
 import { execFile } from "node:child_process";
 import type { ActionDefinition } from "../../types";
 import { listApplications, type AppsWorkerResult } from "../../native";
+import { launchLinuxApp } from "../../native/apps-linux";
 import { CachedActionSource } from "../base";
 import { readAppsCache, writeAppsCache } from "./cache";
 
 /**
  * Installed applications. On Windows: Start Menu shortcuts (`app:` ids) and
- * packaged apps (`pkg:` ids); on macOS: `.app` bundles (`app:` ids). The list
+ * packaged apps (`pkg:` ids); on macOS: `.app` bundles (`app:` ids); on Linux:
+ * `.desktop` entries (`app:` ids). The list
  * comes from the native `listApplications()` capability, which is slow to run
  * cold, so this source persists each result (see
  * cache.ts), seeds from that on-disk copy, and refreshes in the background at
@@ -50,6 +52,13 @@ function toActionDefinitions(result: AppsWorkerResult): ActionDefinition[] {
         type: "application",
       },
       run: async () => {
+        // Linux entries are `.desktop` files, and `shell.openPath` on one asks
+        // the desktop to *open that file* — usually in a text editor. It has to
+        // go through the desktop's launcher instead.
+        if (process.platform === "linux") {
+          await launchLinuxApp(entry);
+          return;
+        }
         const openError = await shell.openPath(entry.path);
         if (openError)
           console.error(`[main] Failed to open ${entry.path}: ${openError}`);
