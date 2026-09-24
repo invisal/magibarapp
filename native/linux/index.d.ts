@@ -17,6 +17,48 @@ export declare class ClipboardWatcher {
 }
 
 /**
+ * Handle for the background hotkey watcher `start_hotkey_watcher` starts —
+ * mirrors `native/win`/`native/mac`'s `HotkeyWatcher` shape so `main/
+ * native/hotkeys.ts` needs no Linux-specific branch of its own. Owns one
+ * background worker thread that serializes `register`/`unregister` into
+ * `gsettings`/`dconf` CRUD calls and, on the same connection, hosts the
+ * `Trigger` D-Bus service for the life of the process.
+ */
+export declare class HotkeyWatcher {
+  /**
+   * Parses `accelerator` and, if it parses, round-trips a CRUD request to
+   * the worker thread and returns whether every `gsettings`/`dconf` call
+   * actually succeeded — see `upsert_custom_keybinding`'s doc for why this
+   * is a real synchronous answer. `false` for an unrepresentable
+   * accelerator string without even reaching the worker.
+   */
+  register(id: string, accelerator: string): boolean
+  /** Idempotent — removing an id that isn't registered is a no-op. */
+  unregister(id: string): void
+  /**
+   * Never reports keystrokes — a `media-keys` custom keybinding has no way
+   * to observe one (it only ever runs its command once bound), so a
+   * shortcut recorder here relies on the renderer's own DOM listener. What
+   * this does do is lift GNOME's modifier+Space shortcuts for the duration
+   * (see `suspend_for_capture`), which would otherwise swallow exactly the
+   * combos a launcher toggle is usually set to before that listener sees them.
+   */
+  startCapture(callback: ((err: Error | null, arg: string) => any)): void
+  /** Gives back what `start_capture` lifted (see `resume_after_capture`). */
+  stopCapture(): void
+  /**
+   * Stops the worker thread (which also drops the `Trigger` D-Bus service's
+   * connection, releasing `HOTKEY_BUS_NAME`). Deliberately leaves every
+   * registered custom keybinding in place rather than tearing them down on
+   * every app quit — they're inert (their `Trigger` call just fails to find
+   * anything listening) until the app starts again, and re-creating them
+   * from scratch on every launch would mean a brief window after each
+   * startup where the user's configured hotkey doesn't work yet. Idempotent.
+   */
+  stop(): void
+}
+
+/**
  * The active window's id, or `0` if none (or the only candidate was `exclude`
  * — the launcher's own X11 window id, so a stray capture of the launcher
  * itself is discarded rather than moved later).
@@ -38,6 +80,60 @@ export declare function applyWindowRect(id: number, rect: LinuxRect): boolean
  * size, or `null` if unavailable (invalid id, or the X11 connection is down).
  */
 export declare function getWindowRect(id: number): LinuxRect | null
+
+/**
+ * The focused window's Mutter stable-sequence id, or `0` if there is none.
+ * `exclude_app_id` is Magibar's own application id, so a capture that happens
+ * while the launcher itself holds focus is discarded rather than acted on
+ * later — the GNOME counterpart of the X11 path's `exclude` window id, which
+ * can't be reused here because the two address windows completely differently.
+ */
+export declare function gnomeActiveWindow(excludeAppId: string): number
+
+/**
+ * The running extension's API version, or `0` if it isn't reachable. Lets the
+ * TypeScript side notice that an older extension is still installed after a
+ * Magibar update and re-install the bundled copy — see
+ * `BUNDLED_EXTENSION_VERSION` in `gnome-extension.ts`.
+ */
+export declare function gnomeApiVersion(): number
+
+/**
+ * Moves and resizes the window. The extension clears any maximized/fullscreen/
+ * minimized state first — Mutter keeps enforcing those over an explicit frame
+ * change, so without that step snapping a maximized window appears to do
+ * nothing.
+ */
+export declare function gnomeApplyWindowRect(id: number, rect: LinuxRect): boolean
+
+/**
+ * The window's frame rect in GNOME's stage coordinates, which are logical
+ * pixels — the same space Electron's `screen` module reports work areas in,
+ * so no scale conversion is needed between the two (see `electron-screen.ts`).
+ */
+export declare function gnomeGetWindowRect(id: number): LinuxRect | null
+
+/**
+ * Whether GNOME currently has any normal application window at all — the
+ * Wayland-session counterpart of `has_xwayland_windows`.
+ */
+export declare function gnomeHasWindows(): boolean
+
+/**
+ * Whether the Magibar GNOME Shell extension is installed, enabled, and
+ * running right now.
+ *
+ * Asks the bus whether anyone owns the extension's name rather than calling
+ * a method on it and inspecting the error, so a "no" costs one round-trip to
+ * `org.freedesktop.DBus` and can't be confused with a method that exists but
+ * failed. Intentionally *not* cached: the user can enable, disable, or
+ * re-install the extension (and GNOME Shell itself can restart) while Magibar
+ * keeps running, and a cached answer here is exactly the bug that made the
+ * X11 check report a permanently stale result.
+ */
+export declare function gnomeShellAvailable(): boolean
+
+export declare function gnomeToggleFullscreen(id: number): boolean
 
 /**
  * Whether any X11/XWayland window exists at all right now — checked via
@@ -127,6 +223,17 @@ export interface NativeProcess {
  * that silently never calls back.
  */
 export declare function startClipboardWatcher(callback: ((err: Error | null) => any)): ClipboardWatcher
+
+/**
+ * Starts the global-hotkey watcher: a background thread opens a D-Bus
+ * session connection, claims `HOTKEY_BUS_NAME`, and hosts `HotkeyService`
+ * on it (serviced automatically by `zbus`'s own internal executor for as
+ * long as the connection stays open — no explicit dispatch loop needed),
+ * then processes `register`/`unregister` calls (relayed from the returned
+ * `HotkeyWatcher`) into `gsettings`/`dconf` CRUD against that same
+ * connection's lifetime.
+ */
+export declare function startHotkeyWatcher(callback: ((err: Error | null, arg: string) => any)): HotkeyWatcher
 
 /**
  * Toggles EWMH `_NET_WM_STATE_FULLSCREEN` on the window — broadly supported

@@ -14,10 +14,12 @@ function QuicklinkForm({
   seed,
   editId,
   duplicateId,
+  draftId,
 }: {
   seed?: string;
   editId?: string;
   duplicateId?: string;
+  draftId?: string;
 }) {
   const { pop } = useRouteStack();
   const { setQuery, reload } = useLauncherHost();
@@ -27,7 +29,14 @@ function QuicklinkForm({
       seed={seed}
       editId={editId}
       duplicateId={duplicateId}
-      onCancel={pop}
+      draftId={draftId}
+      // The form has already parked or cleared its draft by the time this runs
+      // (see its `leave()`); `reload()` is what re-queries main, so the
+      // launcher's "Drafts" section reflects that on the way back.
+      onCancel={() => {
+        pop();
+        reload();
+      }}
       onCreated={(name) => {
         pop();
         setQuery(name);
@@ -63,9 +72,13 @@ export default [
   }),
   createScreen({
     name: "quicklink-create",
-    component: (payload) => (
-      <QuicklinkForm seed={(payload as { seed?: string } | undefined)?.seed} />
-    ),
+    // Also the route a "Drafts" row reopens into (see `@extensions/draft`'s
+    // `DRAFT_ROUTES`), which is why it takes a `draftId` as well as a seed.
+    component: (payload) => {
+      const { seed, draftId } =
+        (payload as { seed?: string; draftId?: string } | undefined) ?? {};
+      return <QuicklinkForm seed={seed} draftId={draftId} />;
+    },
   }),
   createScreen({
     name: "quicklink-edit",

@@ -700,12 +700,21 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.ClipboardWatcher = nativeBinding.ClipboardWatcher
+module.exports.HotkeyWatcher = nativeBinding.HotkeyWatcher
 module.exports.activeWindow = nativeBinding.activeWindow
 module.exports.applyWindowRect = nativeBinding.applyWindowRect
 module.exports.getWindowRect = nativeBinding.getWindowRect
+module.exports.gnomeActiveWindow = nativeBinding.gnomeActiveWindow
+module.exports.gnomeApiVersion = nativeBinding.gnomeApiVersion
+module.exports.gnomeApplyWindowRect = nativeBinding.gnomeApplyWindowRect
+module.exports.gnomeGetWindowRect = nativeBinding.gnomeGetWindowRect
+module.exports.gnomeHasWindows = nativeBinding.gnomeHasWindows
+module.exports.gnomeShellAvailable = nativeBinding.gnomeShellAvailable
+module.exports.gnomeToggleFullscreen = nativeBinding.gnomeToggleFullscreen
 module.exports.hasXwaylandWindows = nativeBinding.hasXwaylandWindows
 module.exports.killProcess = nativeBinding.killProcess
 module.exports.listListeningPorts = nativeBinding.listListeningPorts
 module.exports.listProcesses = nativeBinding.listProcesses
 module.exports.startClipboardWatcher = nativeBinding.startClipboardWatcher
+module.exports.startHotkeyWatcher = nativeBinding.startHotkeyWatcher
 module.exports.toggleFullscreen = nativeBinding.toggleFullscreen

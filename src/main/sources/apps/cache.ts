@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { AppsWorkerResult } from "../../native";
 
 /** Bumped when the persisted shape changes, to invalidate old files. */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 interface CacheFile {
   version: number;

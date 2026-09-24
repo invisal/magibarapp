@@ -1,0 +1,8 @@
+{
+  "uuid": "magibar@magibar.app",
+  "name": "Magibar Window Management",
+  "description": "Lets Magibar snap, move, and resize windows on a GNOME Wayland session. Wayland has no cross-application window-control protocol, so an external app cannot move another app's window on its own; this extension runs inside GNOME Shell and exposes a small private D-Bus API that only Magibar calls. Does nothing on its own — with Magibar uninstalled it just sits idle.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "session-modes": ["user"],
+  "url": "https://github.com/invisal/magibarapp"
+}

@@ -9,24 +9,51 @@ export type LauncherActionType =
   | "plugin";
 
 /**
- * The section a launcher row is listed under. "Results" is what every row
- * becomes once the user types a query.
+ * The section a launcher row is listed under. Both the empty-query root list
+ * and a typed search are sectioned (see `main/sections.ts`); "Results" is only
+ * a fallback for a row nothing else classifies, plus the inline calculator
+ * answer the renderer prepends.
  */
-export type ActionGroup = "Pinned" | "Commands" | "Applications" | "Results";
+export type ActionGroup =
+  /**
+   * The inline calculator answer. Not a section any *action* lands in — the
+   * renderer puts its own calc row here, so that with the result list now
+   * sectioned the answer gets its own heading instead of sharing one.
+   */
+  | "Calculator"
+  /** Unfinished forms the user backed out of — see `@extensions/draft`. */
+  | "Drafts"
+  | "Pinned"
+  /** The few highest-frecency rows, lifted out of their type section. */
+  | "Suggestions"
+  | "Commands"
+  | "Applications"
+  | "Results";
 
-/** Section order in the empty-query list. "Results" only ever appears alone. */
+/** Section order, in both the root list and a typed search. */
 export const ACTION_GROUP_ORDER: readonly ActionGroup[] = [
+  "Calculator",
+  "Drafts",
   "Pinned",
+  "Suggestions",
   "Commands",
   "Applications",
   "Results",
 ];
 
-/** The group an action lands in when its source doesn't pick one; pinned ones head the list. */
+/**
+ * The group an action lands in when its source doesn't pick one.
+ *
+ * `pinnedSection` is on for the root list, where a pinned row heads the list in
+ * its own section, and off for a typed search, where pinning isn't a section —
+ * a matching pinned row sits in its type's section like any other, and rises on
+ * relevance instead.
+ */
 export function defaultActionGroup(
   action: Pick<LauncherAction, "type" | "pinned">,
+  opts?: { pinnedSection?: boolean },
 ): ActionGroup {
-  if (action.pinned) return "Pinned";
+  if (action.pinned && opts?.pinnedSection) return "Pinned";
   return action.type === "application" ? "Applications" : "Commands";
 }
 
@@ -34,9 +61,9 @@ export interface LauncherAction {
   id: string;
   title: string;
   /**
-   * Section this row is listed under. A source may set it; `query()` always
-   * fills it in before it crosses IPC (defaulting from `type`, and forcing
-   * "Results" while a query is typed), so the renderer can rely on it.
+   * Section this row is listed under. A source may set one (Drafts does), and
+   * it wins; otherwise `query()` fills it in from `type` before the row crosses
+   * IPC — so the renderer can always rely on it being set.
    */
   group?: ActionGroup;
   subtitle?: string;
@@ -64,6 +91,11 @@ export interface LauncherAction {
   altNames?: string[];
   /** Extra terms this action should also match on (e.g. a quicklink's tags). */
   tags?: string[];
+  /**
+   * Words the action can be found by but that never outrank a name match —
+   * a Linux app's `.desktop` `Keywords` (exact or prefix, per query word).
+   */
+  searchWords?: string[];
   /** Quicklink is pinned — sorts above unpinned actions in the root list. */
   pinned?: boolean;
   /** Quicklink is hidden from the root list (still returned for an explicit search). */
