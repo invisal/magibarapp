@@ -12,6 +12,7 @@ napi-derive = "3"
 sysinfo = "0.32"
 listeners = "0.6.1"
 x11rb = { version = "0.14.0", features = ["xfixes"] }
+serde = "1"
 zbus = "5"
 
 [build-dependencies]

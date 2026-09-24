@@ -82,6 +82,60 @@ export declare function applyWindowRect(id: number, rect: LinuxRect): boolean
 export declare function getWindowRect(id: number): LinuxRect | null
 
 /**
+ * The focused window's Mutter stable-sequence id, or `0` if there is none.
+ * `exclude_app_id` is Magibar's own application id, so a capture that happens
+ * while the launcher itself holds focus is discarded rather than acted on
+ * later — the GNOME counterpart of the X11 path's `exclude` window id, which
+ * can't be reused here because the two address windows completely differently.
+ */
+export declare function gnomeActiveWindow(excludeAppId: string): number
+
+/**
+ * The running extension's API version, or `0` if it isn't reachable. Lets the
+ * TypeScript side notice that an older extension is still installed after a
+ * Magibar update and re-install the bundled copy — see
+ * `BUNDLED_EXTENSION_VERSION` in `gnome-extension.ts`.
+ */
+export declare function gnomeApiVersion(): number
+
+/**
+ * Moves and resizes the window. The extension clears any maximized/fullscreen/
+ * minimized state first — Mutter keeps enforcing those over an explicit frame
+ * change, so without that step snapping a maximized window appears to do
+ * nothing.
+ */
+export declare function gnomeApplyWindowRect(id: number, rect: LinuxRect): boolean
+
+/**
+ * The window's frame rect in GNOME's stage coordinates, which are logical
+ * pixels — the same space Electron's `screen` module reports work areas in,
+ * so no scale conversion is needed between the two (see `electron-screen.ts`).
+ */
+export declare function gnomeGetWindowRect(id: number): LinuxRect | null
+
+/**
+ * Whether GNOME currently has any normal application window at all — the
+ * Wayland-session counterpart of `has_xwayland_windows`.
+ */
+export declare function gnomeHasWindows(): boolean
+
+/**
+ * Whether the Magibar GNOME Shell extension is installed, enabled, and
+ * running right now.
+ *
+ * Asks the bus whether anyone owns the extension's name rather than calling
+ * a method on it and inspecting the error, so a "no" costs one round-trip to
+ * `org.freedesktop.DBus` and can't be confused with a method that exists but
+ * failed. Intentionally *not* cached: the user can enable, disable, or
+ * re-install the extension (and GNOME Shell itself can restart) while Magibar
+ * keeps running, and a cached answer here is exactly the bug that made the
+ * X11 check report a permanently stale result.
+ */
+export declare function gnomeShellAvailable(): boolean
+
+export declare function gnomeToggleFullscreen(id: number): boolean
+
+/**
  * Whether any X11/XWayland window exists at all right now — checked via
  * `_NET_CLIENT_LIST` on the root window, and `false` if the X11 connection
  * itself can't be established (e.g. a pure-Wayland session with no XWayland).

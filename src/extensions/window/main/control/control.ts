@@ -28,16 +28,21 @@ function impl(): typeof win | typeof mac | typeof linux | null {
 /**
  * Whether window management can actually work here — beyond just "is there a
  * backend for this platform at all" (`impl()` above). win32/darwin always
- * have a real native window to act on; a Linux Wayland session can have zero
- * XWayland windows on the whole desktop, meaning `xdotool`/`wmctrl` would
- * have nothing to operate on no matter which command runs — see
- * `hasXWaylandWindows` in `control-linux.ts`. Checked once and cached for the
- * process's lifetime, so this is cheap to call from `WindowExtension`.
+ * have a real native window to act on; on Linux it depends on the desktop and
+ * on what's running right now, so `control-linux.ts` decides (see
+ * `isSupported` there).
+ *
+ * Deliberately answered fresh on every call rather than cached, because on
+ * Linux it genuinely changes during a session: the user can install or enable
+ * Magibar's GNOME Shell extension, GNOME Shell can restart, and an X11 app can
+ * be started long after Magibar. Caching this once at startup is what
+ * previously made the whole feature stay hidden for the rest of the session.
+ * Callers must not hoist it into a module-level constant for the same reason.
  */
 export function isSupported(): boolean {
   if (process.platform === "win32" || process.platform === "darwin")
     return true;
-  if (process.platform === "linux") return linux.hasXWaylandWindows();
+  if (process.platform === "linux") return linux.isSupported();
   return false;
 }
 

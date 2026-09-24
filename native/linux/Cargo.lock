@@ -519,6 +519,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde",
  "sysinfo",
  "x11rb",
  "zbus",
