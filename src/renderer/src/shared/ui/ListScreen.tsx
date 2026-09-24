@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type ComponentPropsWithoutRef,
+  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type ReactElement,
@@ -14,7 +15,7 @@ import {
 } from "react";
 import { Autocomplete } from "@base-ui/react/autocomplete";
 import { cn } from "cnfast";
-import { iconSrc } from "@renderer/lib/icon";
+import { iconSrc, isGlyphIcon } from "@renderer/lib/icon";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import { Footer, type FooterMenuItem } from "./Footer";
 import { ShortcutLabel } from "./ShortcutLabel";
@@ -115,6 +116,8 @@ function MagicIcon() {
 
 function ItemIcon({ icon }: { icon?: ReactNode }) {
   const src = typeof icon === "string" ? iconSrc(icon) : undefined;
+  const fallback =
+    typeof icon === "string" ? (isGlyphIcon(icon) ? icon : undefined) : icon;
   return (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-lg">
       {src ? (
@@ -125,7 +128,7 @@ function ItemIcon({ icon }: { icon?: ReactNode }) {
           className="h-5 w-5 object-contain"
         />
       ) : (
-        (icon ?? <span className="text-foreground-subtle">?</span>)
+        (fallback ?? <span className="text-foreground-subtle">?</span>)
       )}
     </span>
   );
@@ -188,6 +191,58 @@ const Item = forwardRef<HTMLDivElement, ItemProps>(function Item(
   );
 });
 
+interface GridItemProps extends Omit<ComponentPropsWithoutRef<"div">, "title"> {
+  /** An icon name, or a `data:`/`file:`/`https:` image URL, resolved via
+   *  `iconSrc()` the same way `Item`'s `icon` is. */
+  content?: string;
+  title?: ReactNode;
+  subtitle?: ReactNode;
+  highlighted?: boolean;
+}
+
+/** One tile in a `layout="grid"` `ListScreen` — image-forward, title (and
+ *  optional subtitle) underneath. Real dimensions come from the grid
+ *  container's own `aspect-ratio` (set per column via `columns`/
+ *  `aspectRatio` on `ListScreenRoot`), not from this component. */
+const GridItem = forwardRef<HTMLDivElement, GridItemProps>(function GridItem(
+  { content, title, subtitle, highlighted, className, ...rest },
+  ref,
+) {
+  const src = content ? iconSrc(content) : undefined;
+  return (
+    <div
+      ref={ref}
+      {...rest}
+      className={cn(
+        "flex cursor-default flex-col gap-1 rounded p-2",
+        highlighted ? "bg-item-selected text-foreground" : "hover:bg-item-hover",
+        className,
+      )}
+    >
+      <div className="flex flex-1 items-center justify-center overflow-hidden rounded bg-input/40">
+        {src ? (
+          <img
+            src={src}
+            alt=""
+            loading="lazy"
+            className="max-h-full max-w-full object-contain"
+          />
+        ) : (
+          <span className="text-foreground-subtle">?</span>
+        )}
+      </div>
+      {title != null && (
+        <div className="truncate text-center text-xs">{title}</div>
+      )}
+      {subtitle != null && (
+        <div className="truncate text-center text-[11px] text-foreground-subtle">
+          {subtitle}
+        </div>
+      )}
+    </div>
+  );
+});
+
 /* --------------------------------- root -------------------------------- */
 
 const INPUT_CLASS =
@@ -195,6 +250,13 @@ const INPUT_CLASS =
   "placeholder:text-foreground-subtle [-webkit-app-region:no-drag]";
 
 interface ListScreenBaseProps<T> {
+  /** `"grid"` lays rows out as a CSS grid of tiles (`ListScreen.GridItem`)
+   *  instead of stacked rows — everything else (search, keyboard nav,
+   *  groups, footer/menu) behaves identically either way. Default `"list"`,
+   *  so no existing caller is affected. */
+  layout?: "list" | "grid";
+  /** Grid layout only — tile columns. Ignored in `"list"` layout. */
+  columns?: number;
   /** Full row data, in display order. `null` / `undefined` = loading. */
   data: T[] | null | undefined;
   /** Stable key per row. */
@@ -304,6 +366,8 @@ interface Group<T> {
 }
 
 function ListScreenRoot<T>({
+  layout = "list",
+  columns,
   data,
   getId,
   renderItem,
@@ -406,6 +470,12 @@ function ListScreenRoot<T>({
   // `data`) rather than landing on it before anything's been highlighted.
   const menuTarget =
     highlighted ?? ordered.find((item) => !isDisabled?.(item)) ?? null;
+
+  const gridContainerStyle: CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: `repeat(${columns ?? 5}, minmax(0, 1fr))`,
+    gap: "0.5rem",
+  };
 
   // Whether this screen is pushed on top of something — i.e. whether "back"
   // is a real place to go, as opposed to the launcher root's `onExit`, which
@@ -543,7 +613,16 @@ function ListScreenRoot<T>({
             )}
           >
             <ListScrollRootContext.Provider value={scrollContainerRef}>
-              <Autocomplete.List className="relative w-full">
+              <Autocomplete.List
+                className="relative w-full"
+                // Only the flat (ungrouped) case grids directly on `List`'s
+                // own element — grouped, each group needs its own grid
+                // wrapper below instead (gridding `List` itself here would
+                // lay the *group* boxes into a grid, not their tiles).
+                style={
+                  layout === "grid" && !groups ? gridContainerStyle : undefined
+                }
+              >
                 {groups
                   ? (group: Group<T>) => (
                       <Autocomplete.Group key={group.value} items={group.items}>
@@ -552,9 +631,17 @@ function ListScreenRoot<T>({
                             ? renderGroupLabel(group.value, group.items)
                             : group.value}
                         </Autocomplete.GroupLabel>
-                        <Autocomplete.Collection>
-                          {renderRow}
-                        </Autocomplete.Collection>
+                        {layout === "grid" ? (
+                          <div style={gridContainerStyle}>
+                            <Autocomplete.Collection>
+                              {renderRow}
+                            </Autocomplete.Collection>
+                          </div>
+                        ) : (
+                          <Autocomplete.Collection>
+                            {renderRow}
+                          </Autocomplete.Collection>
+                        )}
                       </Autocomplete.Group>
                     )
                   : renderRow}
@@ -596,4 +683,4 @@ function ListScreenRoot<T>({
   );
 }
 
-export const ListScreen = Object.assign(ListScreenRoot, { Item });
+export const ListScreen = Object.assign(ListScreenRoot, { Item, GridItem });

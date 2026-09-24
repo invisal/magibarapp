@@ -5,6 +5,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
+    "jsx": "react-jsx",
     "strict": true,
     "paths": {
       "@magibar/win": ["./native/win/index.d.ts"],
@@ -13,7 +14,8 @@
       "@core/*": ["./src/core/*"],
       "@main/*": ["./src/main/*"],
       "@shared/*": ["./src/shared/*"],
-      "@extensions/*": ["./src/extensions/*"]
+      "@extensions/*": ["./src/extensions/*"],
+      "@plugin-engine/*": ["./src/plugin-engine/*"]
     },
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
@@ -27,11 +29,14 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/extensions/**/*",
+    "src/plugin-engine/**/*",
     "electron.vite.config.ts"
   ],
   "exclude": [
     "src/extensions/**/renderer/**",
     "src/extensions/*/screen.ts",
-    "src/extensions/*/screen.tsx"
+    "src/extensions/*/screen.tsx",
+    "src/plugin-engine/renderer/**",
+    "src/plugin-engine/install/fixtures/**"
   ]
 }

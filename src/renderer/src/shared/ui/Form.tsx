@@ -383,6 +383,129 @@ function FormSwitch({
   );
 }
 
+/* -------------------------------- dropdown / tag picker ------------------ */
+
+export interface FormPickerItem {
+  value: string;
+  title: string;
+  icon?: string;
+}
+
+/** A single-select control. Same styling/`Form.Field` wiring as `Input`. */
+const Dropdown = forwardRef<
+  HTMLSelectElement,
+  Omit<ComponentPropsWithoutRef<"select">, "children"> & {
+    items: FormPickerItem[];
+  }
+>(function Dropdown({ items, className, ...rest }, ref) {
+  return (
+    <select
+      ref={ref}
+      {...rest}
+      {...useFieldControlProps(rest)}
+      className={cn(CONTROL_CLASS, className)}
+    >
+      {items.map((item) => (
+        <option key={item.value} value={item.value}>
+          {item.title}
+        </option>
+      ))}
+    </select>
+  );
+});
+
+/**
+ * A multi-select control. v1 simplification: a native `<select multiple>`
+ * rather than removable chip UI — functional, not a faithful reproduction
+ * of Raycast's `TagPicker` look. Revisit if that reads wrong for a common
+ * case.
+ */
+const TagPicker = forwardRef<
+  HTMLSelectElement,
+  Omit<ComponentPropsWithoutRef<"select">, "children" | "value" | "onChange"> & {
+    items: FormPickerItem[];
+    value?: string[];
+    onChange?: (value: string[]) => void;
+  }
+>(function TagPicker({ items, value, onChange, className, ...rest }, ref) {
+  return (
+    <select
+      ref={ref}
+      multiple
+      value={value}
+      onChange={(e) =>
+        onChange?.(Array.from(e.target.selectedOptions, (o) => o.value))
+      }
+      {...rest}
+      {...useFieldControlProps(rest)}
+      className={cn(CONTROL_CLASS, "h-auto", className)}
+    >
+      {items.map((item) => (
+        <option key={item.value} value={item.value}>
+          {item.title}
+        </option>
+      ))}
+    </select>
+  );
+});
+
+/* ------------------------------- date / file ------------------------------ */
+
+/** A native date (or date+time) input. Same styling/`Form.Field` wiring as
+ *  `Input`. */
+const DatePicker = forwardRef<
+  HTMLInputElement,
+  Omit<ComponentPropsWithoutRef<"input">, "type"> & {
+    includeTime?: boolean;
+  }
+>(function DatePicker({ includeTime, className, ...rest }, ref) {
+  return (
+    <input
+      ref={ref}
+      type={includeTime ? "datetime-local" : "date"}
+      {...rest}
+      {...useFieldControlProps(rest)}
+      className={cn(CONTROL_CLASS, className)}
+    />
+  );
+});
+
+/** A native file input. Same styling/`Form.Field` wiring as `Input`. */
+const FilePicker = forwardRef<
+  HTMLInputElement,
+  Omit<ComponentPropsWithoutRef<"input">, "type">
+>(function FilePicker({ className, ...rest }, ref) {
+  return (
+    <input
+      ref={ref}
+      type="file"
+      {...rest}
+      {...useFieldControlProps(rest)}
+      className={cn(
+        CONTROL_CLASS,
+        "file:mr-3 file:rounded file:border-0 file:bg-input file:px-2 file:py-1 file:text-foreground",
+        className,
+      )}
+    />
+  );
+});
+
+/* ---------------------------- description / separator --------------------- */
+
+/** A label + block of text, no control — real Raycast's `Form.Description`. */
+function Description({ title, text }: { title?: ReactNode; text: ReactNode }) {
+  return (
+    <Row left={title}>
+      <p className="text-sm text-foreground-subtle">{text}</p>
+    </Row>
+  );
+}
+
+/** A plain horizontal divider between fields. */
+function FormSeparator() {
+  return <hr className="my-1 border-border" />;
+}
+
 /* -------------------------------- actions ------------------------------- */
 
 /** A right-aligned button row aligned to the form's control column, for forms
@@ -407,5 +530,11 @@ export const Form = Object.assign(FormRoot, {
   TextArea,
   Trigger,
   Switch: FormSwitch,
+  Dropdown,
+  TagPicker,
+  DatePicker,
+  FilePicker,
+  Description,
+  Separator: FormSeparator,
   Actions,
 });

@@ -1,5 +1,8 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { cn } from "cnfast";
+import { Marked } from "marked";
+import DOMPurify from "dompurify";
+import { iconSrc } from "@renderer/lib/icon";
 
 /**
  * The right-hand pane of a master/detail `ListScreen` — what the highlighted
@@ -214,10 +217,145 @@ function Row({
         className="flex min-w-0 items-center gap-1.5 text-right"
         title={title ?? (typeof value === "string" ? value : undefined)}
       >
-        {icon && (
-          <img src={icon} alt="" className="h-3.5 w-3.5 shrink-0 rounded-sm" />
-        )}
+        {icon &&
+          iconSrc(icon) && (
+            <img
+              src={iconSrc(icon)}
+              alt=""
+              className="h-3.5 w-3.5 shrink-0 rounded-sm"
+            />
+          )}
         <span className="min-w-0 truncate">{value}</span>
+      </span>
+    </div>
+  );
+}
+
+/** Real Raycast lets a markdown image URL carry `?raycast-width=`/
+ *  `&raycast-height=` to size it (capped — can only shrink, never grow past
+ *  the pane) — including on a `data:` URI, where a bare `?`/`&` appended
+ *  after the base64 payload isn't valid syntax on its own (base64 never
+ *  contains those characters, so this split is unambiguous). Strip them off
+ *  before the browser ever sees the `src`, applying them as a max-width/
+ *  max-height instead. */
+function stripRaycastImageSize(
+  href: string,
+): { src: string; maxWidth?: number; maxHeight?: number } {
+  const match = href.match(
+    /^(.*?)[?&](?:raycast-width=(\d+)|raycast-height=(\d+))(?:&(?:raycast-width=(\d+)|raycast-height=(\d+)))?$/,
+  );
+  if (!match) return { src: href };
+  const [, src, w1, h1, w2, h2] = match;
+  const width = w1 ?? w2;
+  const height = h1 ?? h2;
+  return {
+    src,
+    maxWidth: width ? Number(width) : undefined,
+    maxHeight: height ? Number(height) : undefined,
+  };
+}
+
+/** Attribute-safe escaping for the hand-built `<img>` tag below — DOMPurify
+ *  sanitizes the parsed result afterward regardless, but a raw `"` in
+ *  `text`/`title` breaking out of its attribute shouldn't be relied on that
+ *  defense-in-depth alone to catch. */
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+const markdownRenderer = new Marked({ breaks: true });
+markdownRenderer.use({
+  renderer: {
+    image({ href, title, text }) {
+      const { src, maxWidth, maxHeight } = stripRaycastImageSize(href);
+      const style =
+        maxWidth || maxHeight
+          ? ` style="${maxWidth ? `max-width:${maxWidth}px;` : ""}${maxHeight ? `max-height:${maxHeight}px;` : ""}"`
+          : "";
+      const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
+      return `<img src="${escapeAttr(src)}" alt="${escapeAttr(text)}"${titleAttr}${style}>`;
+    },
+  },
+});
+
+/**
+ * Rendered markdown (headings, bold/italic, links, images, code, lists —
+ * the common subset Raycast `Detail` commands actually use), sanitized
+ * before it ever reaches `dangerouslySetInnerHTML` since it comes from
+ * third-party extension code. Known v1 limitation: the launcher's CSP is
+ * `img-src 'self' data:` (see `plugin-engine/install/search-github.ts`'s own
+ * note on the same constraint), so a markdown image referencing a remote
+ * `https:` URL won't load — only `data:`/local images will. Inlining remote
+ * markdown images as data URIs, the way `search-github.ts` already does for
+ * extension icons, is a real but separate feature, not done here.
+ */
+function Markdown({ children }: { children: string }) {
+  const html = useMemo(() => {
+    const parsed = markdownRenderer.parse(children, { async: false });
+    return DOMPurify.sanitize(parsed);
+  }, [children]);
+  return (
+    <div
+      className="prose prose-sm max-w-none text-foreground/90 [&_a]:text-accent [&_code]:rounded [&_code]:bg-input [&_code]:px-1 [&_img]:max-w-full [&_img]:rounded-md [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-input [&_pre]:p-2"
+      // eslint-disable-next-line react/no-danger -- sanitized above via DOMPurify
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+/** One `Label · target` line, e.g. `Detail.Metadata.Link`. */
+function Link({
+  label,
+  text,
+  target,
+}: {
+  label: ReactNode;
+  text: string;
+  target: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-[3px] text-xs">
+      <span className="shrink-0 text-foreground-subtle">{label}</span>
+      <a
+        href={target}
+        title={target}
+        className="min-w-0 truncate text-right text-accent hover:underline"
+      >
+        {text}
+      </a>
+    </div>
+  );
+}
+
+/** A row of colored pills, e.g. `Detail.Metadata.TagList`. */
+function TagList({
+  label,
+  items,
+}: {
+  label: ReactNode;
+  items: { text: string; color?: string }[];
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 py-[3px] text-xs">
+      <span className="shrink-0 text-foreground-subtle">{label}</span>
+      <span className="flex min-w-0 flex-wrap justify-end gap-1">
+        {items.map((item, i) => (
+          <span
+            key={i}
+            className="truncate rounded-full px-1.5 py-0.5 text-[11px]"
+            style={
+              item.color
+                ? { backgroundColor: `${item.color}26`, color: item.color }
+                : { backgroundColor: "var(--color-input)" }
+            }
+          >
+            {item.text}
+          </span>
+        ))}
       </span>
     </div>
   );
@@ -231,4 +369,7 @@ export const Detail = Object.assign(DetailRoot, {
   Card,
   Info,
   Row,
+  Markdown,
+  Link,
+  TagList,
 });

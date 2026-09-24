@@ -1,0 +1,9 @@
+{
+  "name": "sample-plugin",
+  "title": "Sample Plugin",
+  "description": "A tiny fixture extension used by bundle.test.ts and reconciler.test.ts.",
+  "commands": [
+    { "name": "greet", "title": "Greet", "mode": "no-view" },
+    { "name": "browse", "title": "Browse", "mode": "view" }
+  ]
+}

@@ -42,7 +42,7 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
     ...(process.platform === "darwin" ? { transparent: true } : {}),
     ...(process.platform === "linux" ? { transparent: true } : {}),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -89,7 +89,7 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
   if (process.env["ELECTRON_RENDERER_URL"]) {
     win.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {
-    win.loadFile(join(__dirname, "../renderer/index.html"));
+    win.loadFile(join(import.meta.dirname, "../renderer/index.html"));
   }
 
   launcherWindow = win;

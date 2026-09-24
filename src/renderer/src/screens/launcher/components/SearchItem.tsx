@@ -11,6 +11,7 @@ const TYPE_LABEL: Record<LauncherAction["type"], string> = {
   quicklink: "Quicklink",
   widget: "Widget",
   calculation: "Calculation",
+  plugin: "Plugin",
 };
 
 function ItemIcon({ icon, fallback }: { icon?: string; fallback: string }) {

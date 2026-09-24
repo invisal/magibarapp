@@ -38,6 +38,7 @@ import {
   requestSubtitle,
   settings,
 } from "./actions";
+import { listHostManager } from "@plugin-engine/host/list-host-manager";
 import { isLaunchAtLoginEnabled, setLaunchAtLogin } from "./login-item";
 import { QUIT_PROCESS_CHANNELS } from "@extensions/quit-process/shared/types";
 import { XCODE_CLEAN_CHANNELS } from "@extensions/xcode-clean/shared/types";
@@ -517,4 +518,5 @@ app.on("will-quit", () => {
   unregisterAllHotkeys();
   clipboardHistory.stopPolling();
   quitProcess.stopPolling();
+  listHostManager.disposeAll();
 });

@@ -39,6 +39,11 @@ asar: true
 asarUnpack:
   - "**/*.node"
   - "node_modules/@magibar/**"
+  # The plugin engine's source-build fallback (src/plugin-engine/install/
+  # bundle.ts) runs esbuild, whose per-platform native binary can't execute
+  # from inside app.asar. Store installs never touch it.
+  - "node_modules/esbuild/**"
+  - "node_modules/@esbuild/**"
 
 # @magibar/{win,mac,linux} are all Node-API (ABI-stable) prebuilts; nothing
 # here needs a native rebuild against Electron headers.

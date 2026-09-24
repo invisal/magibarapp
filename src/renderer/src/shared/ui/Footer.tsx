@@ -11,7 +11,7 @@ import {
 import { Autocomplete } from "@base-ui/react/autocomplete";
 import { cn } from "cnfast";
 import { useShortcut } from "@renderer/lib/use-shortcut";
-import { iconSrc } from "@renderer/lib/icon";
+import { iconSrc, isGlyphIcon } from "@renderer/lib/icon";
 import { ShortcutLabel } from "./ShortcutLabel";
 
 /** A key-combo pill (e.g. ⌘⏎ / Ctrl+Enter). Decorative — hidden from a11y. */
@@ -724,11 +724,11 @@ function Menu({
                                   alt=""
                                   className="h-4 w-4 shrink-0 object-contain"
                                 />
-                              ) : (
+                              ) : isGlyphIcon(item.icon) ? (
                                 <span className="w-4 shrink-0 text-center text-[13px]">
                                   {item.icon}
                                 </span>
-                              ))}
+                              ) : null)}
                             <span className="truncate">
                               {armed && item.confirmLabel
                                 ? item.confirmLabel

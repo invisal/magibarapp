@@ -38,6 +38,7 @@ import { ClipboardHistoryExtension } from "@extensions/clipboard-history";
 import { ExtensionStorage } from "@core/storage";
 import { HotkeyBindingStore } from "@extensions/hotkey/main/store";
 import { AliasStore } from "@extensions/alias/main/store";
+import { PluginHostSource } from "@plugin-engine/host/PluginHostSource";
 
 // Point extensions at `<userData>/extensions/` before any is constructed below.
 configureExtensions(app.getPath("userData"));
@@ -158,6 +159,15 @@ export function updateCalculatorSettings(
 export const quicklinkSource = new QuicklinkSource();
 
 /**
+ * The plugin engine (`src/plugin-engine`) — every installed
+ * Raycast-extension-compatible plugin's commands, as one source covering all
+ * of them (not one entry per plugin; see `PluginHostSource`'s doc comment).
+ * Owns `<userData>/plugins/`, entirely separate from `configureExtensions`'s
+ * `<userData>/extensions/` root above.
+ */
+const pluginHostSource = new PluginHostSource(app.getPath("userData"));
+
+/**
  * Registry of action sources. Order matters: `query` keeps it, and the
  * stable sort below preserves it among equally-scored results (so built-in
  * commands rank ahead of applications on a tie).
@@ -171,6 +181,7 @@ const sources: ActionSource[] = [
   quitProcess,
   xcodeClean,
   quicklinkSource,
+  pluginHostSource,
   new InstalledAppSource(),
   new ExchangeRateSource(),
   cryptoPriceSource,

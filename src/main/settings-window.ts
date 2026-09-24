@@ -37,7 +37,7 @@ export function openSettingsWindow(): void {
     autoHideMenuBar: true,
     ...framelessChrome,
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -55,6 +55,6 @@ export function openSettingsWindow(): void {
       `${process.env["ELECTRON_RENDERER_URL"]}/settings.html`,
     );
   } else {
-    settingsWindow.loadFile(join(__dirname, "../renderer/settings.html"));
+    settingsWindow.loadFile(join(import.meta.dirname, "../renderer/settings.html"));
   }
 }
