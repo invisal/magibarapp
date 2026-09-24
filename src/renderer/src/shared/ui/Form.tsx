@@ -422,7 +422,10 @@ const Dropdown = forwardRef<
  */
 const TagPicker = forwardRef<
   HTMLSelectElement,
-  Omit<ComponentPropsWithoutRef<"select">, "children" | "value" | "onChange"> & {
+  Omit<
+    ComponentPropsWithoutRef<"select">,
+    "children" | "value" | "onChange"
+  > & {
     items: FormPickerItem[];
     value?: string[];
     onChange?: (value: string[]) => void;

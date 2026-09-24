@@ -55,6 +55,8 @@ export function openSettingsWindow(): void {
       `${process.env["ELECTRON_RENDERER_URL"]}/settings.html`,
     );
   } else {
-    settingsWindow.loadFile(join(import.meta.dirname, "../renderer/settings.html"));
+    settingsWindow.loadFile(
+      join(import.meta.dirname, "../renderer/settings.html"),
+    );
   }
 }

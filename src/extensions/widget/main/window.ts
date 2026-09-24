@@ -74,8 +74,11 @@ export function openWidgetWindow(target: WidgetView): void {
       `${process.env["ELECTRON_RENDERER_URL"]}/widget.html#${hash}`,
     );
   } else {
-    void widgetWindow.loadFile(join(import.meta.dirname, "../renderer/widget.html"), {
-      hash,
-    });
+    void widgetWindow.loadFile(
+      join(import.meta.dirname, "../renderer/widget.html"),
+      {
+        hash,
+      },
+    );
   }
 }

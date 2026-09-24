@@ -19,7 +19,10 @@ import { actionAliasesApi } from "@extensions/alias/ipc/preload";
 import { quicklinkApi } from "@extensions/quicklink/ipc/preload";
 import { widgetApi } from "@extensions/widget/ipc/preload";
 import { windowApi } from "@extensions/window/ipc/preload";
-import { pluginEngineApi, pluginListApi } from "@plugin-engine/host/ipc-preload";
+import {
+  pluginEngineApi,
+  pluginListApi,
+} from "@plugin-engine/host/ipc-preload";
 
 const api = {
   platform: process.platform,

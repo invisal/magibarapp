@@ -215,7 +215,9 @@ const GridItem = forwardRef<HTMLDivElement, GridItemProps>(function GridItem(
       {...rest}
       className={cn(
         "flex cursor-default flex-col gap-1 rounded p-2",
-        highlighted ? "bg-item-selected text-foreground" : "hover:bg-item-hover",
+        highlighted
+          ? "bg-item-selected text-foreground"
+          : "hover:bg-item-hover",
         className,
       )}
     >

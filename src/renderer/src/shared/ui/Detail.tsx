@@ -217,14 +217,13 @@ function Row({
         className="flex min-w-0 items-center gap-1.5 text-right"
         title={title ?? (typeof value === "string" ? value : undefined)}
       >
-        {icon &&
-          iconSrc(icon) && (
-            <img
-              src={iconSrc(icon)}
-              alt=""
-              className="h-3.5 w-3.5 shrink-0 rounded-sm"
-            />
-          )}
+        {icon && iconSrc(icon) && (
+          <img
+            src={iconSrc(icon)}
+            alt=""
+            className="h-3.5 w-3.5 shrink-0 rounded-sm"
+          />
+        )}
         <span className="min-w-0 truncate">{value}</span>
       </span>
     </div>
@@ -238,9 +237,11 @@ function Row({
  *  contains those characters, so this split is unambiguous). Strip them off
  *  before the browser ever sees the `src`, applying them as a max-width/
  *  max-height instead. */
-function stripRaycastImageSize(
-  href: string,
-): { src: string; maxWidth?: number; maxHeight?: number } {
+function stripRaycastImageSize(href: string): {
+  src: string;
+  maxWidth?: number;
+  maxHeight?: number;
+} {
   const match = href.match(
     /^(.*?)[?&](?:raycast-width=(\d+)|raycast-height=(\d+))(?:&(?:raycast-width=(\d+)|raycast-height=(\d+)))?$/,
   );
