@@ -13,6 +13,10 @@ files:
   - out/**
   - resources/**
   - package.json
+  # Developer-only harness for the GNOME Shell extension next to it — it drives
+  # that extension against Mutter's typelib outside of GNOME Shell (see the file
+  # header) and has no place in a shipped build.
+  - "!resources/gnome-extension/verify.js"
   # @magibar/{win,mac,linux} each ship a prebuilt napi .node but also carry
   # their Rust source and build tree (~700 MB) — keep only what the addon
   # needs at runtime.

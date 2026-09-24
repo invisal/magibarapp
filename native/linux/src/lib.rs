@@ -101,11 +101,43 @@ pub fn active_window(exclude: i64) -> i64 {
     return 0;
   };
   let id = reply.value32().and_then(|mut values| values.next()).unwrap_or(0);
-  if id != 0 && id as i64 != exclude {
-    id as i64
-  } else {
-    0
+  if id == 0 || id as i64 == exclude {
+    return 0;
   }
+  // `_NET_ACTIVE_WINDOW` is not, on its own, a promise that there is a real
+  // application window focused. Under GNOME Wayland with no XWayland clients
+  // at all, Mutter still points it at one of its own internal windows (a
+  // sibling of the `_NET_SUPPORTING_WM_CHECK` window), which has no
+  // properties and appears in no client list — but which `get_geometry` and
+  // `configure_window` both happily accept. Acting on it meant every window
+  // command silently "succeeded" while moving an invisible internal window,
+  // and — because a capture had apparently worked — suppressed the "nothing
+  // to act on" path that would otherwise have told the user why. Checking
+  // `_NET_CLIENT_LIST`, the window manager's own list of the windows it
+  // manages, is what separates a real target from that placeholder.
+  if !managed_windows(x11).contains(&id) {
+    return 0;
+  }
+  id as i64
+}
+
+/// The window manager's `_NET_CLIENT_LIST` — every window it currently
+/// manages, which for EWMH purposes is the definition of "a real application
+/// window". Empty when the property is missing or unreadable, so callers
+/// treat an unreachable/non-EWMH window manager the same as an empty desktop.
+fn managed_windows(x11: &X11) -> Vec<u32> {
+  let Some(client_list) = atom(&x11.conn, "_NET_CLIENT_LIST") else {
+    return Vec::new();
+  };
+  let Ok(cookie) =
+    x11.conn.get_property(false, x11.root, client_list, AtomEnum::WINDOW, 0, u32::MAX)
+  else {
+    return Vec::new();
+  };
+  let Ok(reply) = cookie.reply() else {
+    return Vec::new();
+  };
+  reply.value32().map(|values| values.collect()).unwrap_or_default()
 }
 
 /// Whether any X11/XWayland window exists at all right now — checked via
@@ -119,18 +151,7 @@ pub fn has_xwayland_windows() -> bool {
   let Some(x11) = x11() else {
     return false;
   };
-  let Some(client_list) = atom(&x11.conn, "_NET_CLIENT_LIST") else {
-    return false;
-  };
-  let Ok(cookie) =
-    x11.conn.get_property(false, x11.root, client_list, AtomEnum::WINDOW, 0, u32::MAX)
-  else {
-    return false;
-  };
-  let Ok(reply) = cookie.reply() else {
-    return false;
-  };
-  reply.value32().map(|values| values.count() > 0).unwrap_or(false)
+  !managed_windows(x11).is_empty()
 }
 
 #[napi(object)]
@@ -200,6 +221,161 @@ pub fn toggle_fullscreen(id: i64) -> bool {
     return false;
   };
   send_wm_state(x11, id as u32, NET_WM_STATE_TOGGLE, fullscreen, 0)
+}
+
+// ---------------------------------------------------------------------------
+// GNOME Shell window control (Wayland)
+// ---------------------------------------------------------------------------
+//
+// Everything above this point speaks X11, and therefore can only ever reach
+// XWayland-backed windows. On a GNOME Wayland session most applications are
+// Wayland-native, so for them the X11 path is not "degraded" — it is blind:
+// they do not appear in `_NET_CLIENT_LIST`, and no amount of EWMH can move
+// them. That is Wayland's design, not a gap in `x11rb`.
+//
+// The only supported way to move a Wayland window is to run code inside the
+// compositor, so Magibar ships a small GNOME Shell extension
+// (`resources/gnome-extension/magibar@magibar.app`) that does exactly that and
+// exposes the private D-Bus API called below. The alternatives were checked
+// and are closed: `org.gnome.Shell.Introspect` is read-only and returns
+// `AccessDenied` to unprivileged callers, and `org.gnome.Shell.Eval` is
+// refused outside GNOME's unsafe mode.
+//
+// Installation and enablement of that extension live on the TypeScript side
+// (`gnome-extension.ts`) — it is file copying and `gsettings`, with no reason
+// to be native. This module only *talks* to it, and every function here
+// answers `false`/`None` when the extension isn't running, which is what lets
+// `control-linux.ts` fall back to the X11 path without a branch of its own.
+
+const GNOME_BUS_NAME: &str = "app.magibar.Shell";
+const GNOME_OBJECT_PATH: &str = "/app/magibar/Shell";
+const GNOME_INTERFACE: &str = "app.magibar.WindowManager";
+
+/// A session-bus connection shared by every call below, opened lazily and
+/// cached for the process's lifetime. Separate from the hotkey watcher's
+/// connection, which is owned by (and lives on) its own worker thread.
+///
+/// `None` when the session bus can't be reached at all, which is the normal
+/// state on a non-desktop session rather than an error worth surfacing.
+fn gnome_bus() -> Option<&'static zbus::blocking::Connection> {
+  static CONN: OnceLock<Option<zbus::blocking::Connection>> = OnceLock::new();
+  CONN.get_or_init(|| zbus::blocking::Connection::session().ok()).as_ref()
+}
+
+/// Calls one method on the extension and deserializes its reply.
+///
+/// Every failure mode collapses to `None` deliberately: a missing extension,
+/// a disabled one, a shell that just restarted, and a genuine call error are
+/// all "the GNOME path isn't usable right now", and the caller's answer is the
+/// same in each case — fall back to X11. These calls are made from the main
+/// Node thread and block on a bus round-trip (sub-millisecond on a session
+/// bus, and only ever in response to a user command), the same way the X11
+/// calls above block on an X server round-trip.
+fn gnome_call<B, R>(method: &str, args: &B) -> Option<R>
+where
+  B: serde::ser::Serialize + zbus::zvariant::DynamicType,
+  R: for<'d> zbus::zvariant::DynamicDeserialize<'d>,
+{
+  let conn = gnome_bus()?;
+  let reply = conn
+    .call_method(Some(GNOME_BUS_NAME), GNOME_OBJECT_PATH, Some(GNOME_INTERFACE), method, args)
+    .ok()?;
+  reply.body().deserialize::<R>().ok()
+}
+
+/// Whether the Magibar GNOME Shell extension is installed, enabled, and
+/// running right now.
+///
+/// Asks the bus whether anyone owns the extension's name rather than calling
+/// a method on it and inspecting the error, so a "no" costs one round-trip to
+/// `org.freedesktop.DBus` and can't be confused with a method that exists but
+/// failed. Intentionally *not* cached: the user can enable, disable, or
+/// re-install the extension (and GNOME Shell itself can restart) while Magibar
+/// keeps running, and a cached answer here is exactly the bug that made the
+/// X11 check report a permanently stale result.
+#[napi]
+pub fn gnome_shell_available() -> bool {
+  let Some(conn) = gnome_bus() else {
+    return false;
+  };
+  conn
+    .call_method(
+      Some("org.freedesktop.DBus"),
+      "/org/freedesktop/DBus",
+      Some("org.freedesktop.DBus"),
+      "NameHasOwner",
+      &(GNOME_BUS_NAME,),
+    )
+    .ok()
+    .and_then(|reply| reply.body().deserialize::<bool>().ok())
+    .unwrap_or(false)
+}
+
+/// The running extension's API version, or `0` if it isn't reachable. Lets the
+/// TypeScript side notice that an older extension is still installed after a
+/// Magibar update and re-install the bundled copy — see
+/// `BUNDLED_EXTENSION_VERSION` in `gnome-extension.ts`.
+#[napi]
+pub fn gnome_api_version() -> u32 {
+  gnome_call::<_, u32>("Version", &()).unwrap_or(0)
+}
+
+/// Whether GNOME currently has any normal application window at all — the
+/// Wayland-session counterpart of `has_xwayland_windows`.
+#[napi]
+pub fn gnome_has_windows() -> bool {
+  gnome_call::<_, bool>("HasWindows", &()).unwrap_or(false)
+}
+
+/// The focused window's Mutter stable-sequence id, or `0` if there is none.
+/// `exclude_app_id` is Magibar's own application id, so a capture that happens
+/// while the launcher itself holds focus is discarded rather than acted on
+/// later — the GNOME counterpart of the X11 path's `exclude` window id, which
+/// can't be reused here because the two address windows completely differently.
+#[napi]
+pub fn gnome_active_window(exclude_app_id: String) -> u32 {
+  gnome_call::<_, u32>("GetFocused", &(exclude_app_id,)).unwrap_or(0)
+}
+
+/// The window's frame rect in GNOME's stage coordinates, which are logical
+/// pixels — the same space Electron's `screen` module reports work areas in,
+/// so no scale conversion is needed between the two (see `electron-screen.ts`).
+#[napi]
+pub fn gnome_get_window_rect(id: u32) -> Option<LinuxRect> {
+  let (ok, x, y, width, height) = gnome_call::<_, (bool, i32, i32, i32, i32)>("GetRect", &(id,))?;
+  if !ok {
+    return None;
+  }
+  Some(LinuxRect {
+    x: x as f64,
+    y: y as f64,
+    width: width as f64,
+    height: height as f64,
+  })
+}
+
+/// Moves and resizes the window. The extension clears any maximized/fullscreen/
+/// minimized state first — Mutter keeps enforcing those over an explicit frame
+/// change, so without that step snapping a maximized window appears to do
+/// nothing.
+#[napi]
+pub fn gnome_apply_window_rect(id: u32, rect: LinuxRect) -> bool {
+  gnome_call::<_, bool>(
+    "MoveResize",
+    &(
+      id,
+      rect.x.round() as i32,
+      rect.y.round() as i32,
+      rect.width.round() as i32,
+      rect.height.round() as i32,
+    ),
+  )
+  .unwrap_or(false)
+}
+
+#[napi]
+pub fn gnome_toggle_fullscreen(id: u32) -> bool {
+  gnome_call::<_, bool>("ToggleFullscreen", &(id,)).unwrap_or(false)
 }
 
 /// Custom `ClientMessage` type atom `ClipboardWatcher::stop` sends to wake the

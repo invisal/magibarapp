@@ -24,15 +24,6 @@ import {
 import { WindowLayoutStore } from "./main/store";
 
 /**
- * `./control/control` has a backend for all three desktop platforms — see
- * `control-win.ts`/`control-mac.ts`/`control-linux.ts`. On Linux this also
- * checks that there's actually an XWayland window to act on at all — see
- * `isSupported` in `control.ts`. Checked once (and cached) the first time
- * this module loads, effectively at startup.
- */
-const SUPPORTED_PLATFORM = isSupported();
-
-/**
  * Window-management commands (`win:` ids) — halves, quarters, thirds/two-thirds,
  * sixths, fourths, three-fourths, and the top/bottom row equivalents of
  * third/two-thirds/three-fourths, using ordinal naming ("First/Last Third", not
@@ -81,8 +72,16 @@ export class WindowExtension extends Extension {
     registerWindowIpc(ipc, this.store, this.settings);
   }
 
+  /**
+   * Re-checks `isSupported()` on every call rather than reading a value
+   * captured at startup. On Linux the answer really does change mid-session —
+   * installing Magibar's GNOME Shell extension, or simply opening an X11 app —
+   * and the startup-cached version of this check is what used to leave window
+   * management missing from search for the rest of the session. `provide()` is
+   * already called on every source refresh, so this costs one cheap probe.
+   */
   provide(): ActionDefinition[] {
-    if (!SUPPORTED_PLATFORM) return [];
+    if (!isSupported()) return [];
     return [...this.definitions, ...this.customLayoutDefinitions()];
   }
 
@@ -153,14 +152,12 @@ const GRID_TITLE_OVERRIDES: Partial<Record<GridRegion, string>> = {
 };
 
 /**
- * All commands — empty on a platform `./control/control` has no backend for at
- * all, rather than listing commands that would silently do nothing when run.
- * (Today this only matters for an unrecognized `process.platform`; win32,
- * darwin, and linux are all covered.)
+ * All commands. Built once, unconditionally — whether they're *offered* is
+ * `provide()`'s call, re-made on every refresh, so this must not gate on
+ * `isSupported()` itself: it runs at construction time, when a Linux session's
+ * answer can still change.
  */
 function buildDefinitions(): ActionDefinition[] {
-  if (!SUPPORTED_PLATFORM) return [];
-
   return [
     ...GRID_REGION_IDS.map((id) => gridRegion(id)),
     region("center", "Center"),
