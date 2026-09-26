@@ -259,14 +259,16 @@ export class PluginHostSource implements ActionSource {
       {
         action: {
           id: INSTALL_ACTION_ID,
-          title: "Search Raycast Store",
-          subtitle: "Install Raycast extensions",
+          title: "Extension",
+          subtitle: "Install extensions",
           icon: "🧩",
           type: "command",
           altNames: [
+            "Store",
+            "Extension",
+            "Plugin",
             "Install Extension",
             "Install Plugin",
-            "Raycast Extensions",
           ],
         },
         run: () => {},
@@ -275,7 +277,7 @@ export class PluginHostSource implements ActionSource {
         action: {
           id: MANAGE_ACTION_ID,
           title: "Manage Extensions",
-          subtitle: "Configure or uninstall Raycast extensions",
+          subtitle: "Configure or uninstall extensions",
           icon: "🧩",
           type: "command",
           altNames: ["Uninstall Extension", "Extension Preferences"],

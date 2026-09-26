@@ -116,15 +116,14 @@ export function PluginManageScreen(): ReactNode {
       });
     }
     items.push({
-      label:
-        plugin.source === "store" ? "Update from Raycast Store" : "Reinstall",
+      label: plugin.source === "store" ? "Update" : "Reinstall",
       icon: "⬇️",
       onSelect: () => void update(plugin),
     });
     if (plugin.source === "store") {
       if (plugin.author) {
         items.push({
-          label: "Open in Raycast Store",
+          label: "Open in Store",
           icon: "🌐",
           onSelect: () =>
             void window.api.pluginEngine.openStorePage(
@@ -220,7 +219,7 @@ export function PluginManageScreen(): ReactNode {
       onExit={pop}
       footerLabel={footerLabel}
       loadingLabel="Loading…"
-      emptyLabel="No extensions installed yet — use “Search Raycast Store” to add one."
+      emptyLabel="No extensions installed yet — search the Store to add one."
     />
   );
 }

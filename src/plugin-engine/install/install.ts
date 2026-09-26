@@ -162,7 +162,7 @@ async function stageStore(
   platform: NodeJS.Platform,
 ): Promise<StagedPlugin> {
   const progress = opts.onProgress ?? (() => {});
-  progress("resolving", `Looking up "${source.name}" in the Raycast Store…`);
+  progress("resolving", `Looking up "${source.name}"…`);
   let ref: { name: string; author?: string; title?: string } = source;
   if (source.folder) {
     ref =

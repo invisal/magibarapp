@@ -13,7 +13,7 @@ import type { InstalledPluginSummary } from "@plugin-engine/host/protocol";
 import { FieldsForm, usePluginPreferences } from "./PluginPreferencesScreen";
 
 const SOURCE_LABEL: Record<InstalledPluginSummary["source"], string> = {
-  store: "Raycast Store",
+  store: "Store",
   github: "GitHub",
   local: "Local folder",
 };

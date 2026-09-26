@@ -346,7 +346,7 @@ export function PluginInstallScreen(): ReactNode {
     ];
     if (row.kind === "store") {
       items.push({
-        label: "Open in Raycast Store",
+        label: "Open in Store",
         icon: "🌐",
         onSelect: () =>
           void window.api.pluginEngine.openStorePage(
@@ -367,7 +367,7 @@ export function PluginInstallScreen(): ReactNode {
           ? `Installed ${status.title} — find its commands in the launcher`
           : searchError
             ? `⚠︎ ${searchError}`
-            : "Raycast Store";
+            : "Store";
 
   return (
     <ListScreen<Row>
@@ -381,7 +381,7 @@ export function PluginInstallScreen(): ReactNode {
           setStatus({ state: "idle" });
         }
       }}
-      placeholder="Search Raycast Store, or paste a GitHub URL / folder path…"
+      placeholder="Search extensions, or paste a GitHub URL / folder path…"
       renderItem={(row) =>
         row.kind === "store" ? (
           <ListScreen.Item
@@ -426,13 +426,13 @@ export function PluginInstallScreen(): ReactNode {
       menu={() => menu(selected)}
       onExit={pop}
       footerLabel={footerLabel}
-      loadingLabel="Searching the Raycast Store…"
+      loadingLabel="Searching extensions…"
       emptyLabel={
         query.trim()
           ? searchError
-            ? "Couldn't reach the Raycast Store."
+            ? "Couldn't reach the Store."
             : "No extensions found."
-          : "Type to search thousands of Raycast extensions."
+          : "Type to search thousands of extensions."
       }
     />
   );

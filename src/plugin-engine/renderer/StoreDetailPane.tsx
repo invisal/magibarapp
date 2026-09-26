@@ -227,7 +227,7 @@ export function StoreDetailPane({
   if (!result) {
     return (
       <Detail.Empty>
-        Search thousands of Raycast extensions — select one to see its details.
+        Search thousands of extensions — select one to see its details.
       </Detail.Empty>
     );
   }
