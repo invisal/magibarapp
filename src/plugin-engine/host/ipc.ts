@@ -8,6 +8,7 @@ import { rm } from "node:fs/promises";
 import { nativeImage, shell, type IpcMain, type WebContents } from "electron";
 import {
   fetchHitIcons,
+  fetchStoreDetail,
   isPlatformSupported,
   searchStore,
 } from "../install/store.ts";
@@ -28,6 +29,7 @@ import {
   type PluginInboundEvent,
   type PluginPreferencesPayload,
   type SearchStoreResponse,
+  type StoreDetailResponse,
 } from "./protocol.ts";
 import { reinstallSource } from "../registry.ts";
 import type {
@@ -139,10 +141,35 @@ export function registerPluginEngineIpc(
             platforms: hit.platforms,
             downloadCount: hit.downloadCount,
             commandCount: hit.commandCount,
+            commands: hit.commands.map((command) => ({
+              name: command.name,
+              title: command.title,
+              description: command.description,
+              supported: command.mode === "view" || command.mode === "no-view",
+            })),
+            categories: hit.categories,
+            authorAvatarUrl: hit.authorAvatarUrl,
+            createdAt: hit.createdAt,
+            updatedAt: hit.updatedAt,
             supported: isPlatformSupported(hit.platforms),
             installed: installed.has(pluginIdFromName(hit.name)),
           })),
         };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipc.handle(
+    PLUGIN_ENGINE_CHANNELS.storeDetail,
+    async (
+      _event,
+      author: string,
+      name: string,
+    ): Promise<StoreDetailResponse> => {
+      try {
+        return { ok: true, ...(await fetchStoreDetail(author, name)) };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

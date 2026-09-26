@@ -439,6 +439,8 @@ export const PLUGIN_ENGINE_CHANNELS = {
   launch: "plugin-engine:launch",
   /** Renderer -> main: open an extension's Raycast Store page in the browser. */
   openStorePage: "plugin-engine:open-store-page",
+  /** Renderer -> main: screenshots/changelog for the highlighted Store hit. */
+  storeDetail: "plugin-engine:store-detail",
 } as const;
 
 /** One Raycast Store listing matching a search query — see `install/store.ts`. */
@@ -456,14 +458,41 @@ export interface StoreExtensionSearchResult {
   platforms: string[] | null;
   downloadCount: number;
   commandCount: number;
+  commands: StoreExtensionCommand[];
+  categories: string[];
+  /** Author avatar image URL (`https:`). */
+  authorAvatarUrl?: string;
+  /** Unix seconds. */
+  createdAt?: number;
+  updatedAt?: number;
   /** Whether this platform can run it (see `platforms`). */
   supported: boolean;
   /** Already installed (matched by plugin id). */
   installed: boolean;
 }
 
+export interface StoreExtensionCommand {
+  name: string;
+  title: string;
+  description?: string;
+  /** Whether Magibar can run it — `menu-bar` commands (and AI tools,
+   *  which aren't commands at all) can't. */
+  supported: boolean;
+}
+
 export type SearchStoreResponse =
   | { ok: true; results: StoreExtensionSearchResult[] }
+  | { ok: false; error: string };
+
+/** What the Store search leaves out, fetched per highlighted hit. */
+export type StoreDetailResponse =
+  | {
+      ok: true;
+      /** Screenshot image URLs (`https:`). */
+      screenshots: string[];
+      /** Newest first. */
+      changelog: { title: string; date?: string; markdown?: string }[];
+    }
   | { ok: false; error: string };
 
 export type InstallSourceInput =

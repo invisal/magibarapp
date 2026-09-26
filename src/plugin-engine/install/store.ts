@@ -42,8 +42,10 @@ export interface StoreListing {
   name: string;
   title: string;
   description?: string;
-  author?: { handle?: string; name?: string };
-  owner?: { handle?: string; name?: string };
+  author?: { handle?: string; name?: string; avatar?: string | null };
+  owner?: { handle?: string; name?: string; avatar?: string | null };
+  categories?: string[];
+  created_at?: number;
   icons?: { light?: string | null; dark?: string | null };
   platforms?: string[] | null;
   download_count?: number;
@@ -56,16 +58,50 @@ export interface StoreListing {
   kill_listed_at?: number;
 }
 
+/** One command as the Store lists it. */
+export interface StoreCommand {
+  name: string;
+  title: string;
+  description?: string;
+  /** `"view"`, `"no-view"`, `"menu-bar"`, … */
+  mode?: string;
+}
+
 export interface StoreSearchHit {
   name: string;
   author: string;
   authorName?: string;
+  authorAvatarUrl?: string;
   title: string;
   description?: string;
   iconUrl: string | null;
   platforms: string[] | null;
   downloadCount: number;
   commandCount: number;
+  commands: StoreCommand[];
+  categories: string[];
+  /** Unix seconds. */
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+function storeCommands(value: unknown): StoreCommand[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw) => {
+    const c = raw as Record<string, unknown> | null;
+    if (!c || typeof c.name !== "string") return [];
+    return [
+      {
+        name: c.name,
+        title: typeof c.title === "string" && c.title ? c.title : c.name,
+        description:
+          typeof c.description === "string" && c.description
+            ? c.description
+            : undefined,
+        mode: typeof c.mode === "string" ? c.mode : undefined,
+      },
+    ];
+  });
 }
 
 type FetchLike = typeof fetch;
@@ -97,13 +133,93 @@ export function mapListing(listing: StoreListing): StoreSearchHit {
     name: listing.name,
     author: listing.author?.handle ?? listing.owner?.handle ?? "",
     authorName: listing.author?.name,
+    authorAvatarUrl:
+      listing.author?.avatar ?? listing.owner?.avatar ?? undefined,
     title: listing.title || listing.name,
     description: listing.description,
     iconUrl: listing.icons?.light ?? listing.icons?.dark ?? null,
     platforms: listing.platforms ?? null,
     downloadCount: listing.download_count ?? 0,
     commandCount: Array.isArray(listing.commands) ? listing.commands.length : 0,
+    commands: storeCommands(listing.commands),
+    categories: Array.isArray(listing.categories)
+      ? listing.categories.filter((c): c is string => typeof c === "string")
+      : [],
+    createdAt: listing.created_at,
+    updatedAt: listing.updated_at,
   };
+}
+
+/** The per-extension endpoint — a listing plus what search leaves out
+ *  (screenshots, changelog). Same unofficial API family as search. */
+export const STORE_DETAIL_URL = "https://www.raycast.com/api/v1/extensions";
+
+export interface StoreChangelogEntry {
+  title: string;
+  date?: string;
+  markdown?: string;
+}
+
+export interface StoreDetail {
+  /** Screenshot image URLs, in the Store's order. */
+  screenshots: string[];
+  /** Newest first. */
+  changelog: StoreChangelogEntry[];
+}
+
+const detailCache = new Map<string, { at: number; detail: StoreDetail }>();
+
+/** An author handle / extension name safe to put in a URL path. */
+const STORE_SEGMENT = /^[\w.-]+$/;
+
+/** Screenshots and changelog for one extension; cached like search. */
+export async function fetchStoreDetail(
+  author: string,
+  name: string,
+  opts: { fetch?: FetchLike } = {},
+): Promise<StoreDetail> {
+  if (!STORE_SEGMENT.test(author) || !STORE_SEGMENT.test(name)) {
+    throw new Error("invalid extension reference");
+  }
+  const key = `${author}/${name}`;
+  const cached = detailCache.get(key);
+  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS) {
+    return cached.detail;
+  }
+  const res = await (opts.fetch ?? fetch)(`${STORE_DETAIL_URL}/${key}`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`the Raycast Store returned an error (${res.status})`);
+  }
+  const body = (await res.json()) as {
+    metadata?: unknown;
+    changelog?: { versions?: unknown };
+  };
+  const screenshots = Array.isArray(body.metadata)
+    ? body.metadata.filter(
+        (url): url is string =>
+          typeof url === "string" && url.startsWith("https://"),
+      )
+    : [];
+  const versions = Array.isArray(body.changelog?.versions)
+    ? body.changelog.versions
+    : [];
+  const changelog = versions.flatMap((raw): StoreChangelogEntry[] => {
+    const v = raw as Record<string, unknown> | null;
+    if (!v || typeof v.title !== "string") return [];
+    return [
+      {
+        title: v.title,
+        date: typeof v.date === "string" ? v.date : undefined,
+        markdown: typeof v.markdown === "string" ? v.markdown : undefined,
+      },
+    ];
+  });
+  const detail = { screenshots, changelog };
+  detailCache.set(key, { at: Date.now(), detail });
+  return detail;
 }
 
 async function fetchListings(

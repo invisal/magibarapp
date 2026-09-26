@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { strToU8, zipSync } from "fflate";
 import {
   extractPackage,
+  fetchStoreDetail,
   isPlatformSupported,
   mapListing,
   resolveStoreExtension,
@@ -33,23 +34,85 @@ describe("mapListing", () => {
         name: "spotify-player",
         title: "Spotify Player",
         description: "Control Spotify",
-        author: { handle: "mattisssa", name: "Artem" },
+        author: {
+          handle: "mattisssa",
+          name: "Artem",
+          avatar: "https://files.raycast.com/avatar",
+        },
         icons: { light: "https://files.raycast.com/icon", dark: null },
         platforms: ["macOS", "Windows"],
         download_count: 42,
-        commands: [{}, {}],
+        categories: ["Media"],
+        created_at: 100,
+        updated_at: 200,
+        commands: [
+          { name: "play", title: "Play", description: "", mode: "no-view" },
+          { name: "bar", title: "", mode: "menu-bar" },
+        ],
       }),
       {
         name: "spotify-player",
         author: "mattisssa",
         authorName: "Artem",
+        authorAvatarUrl: "https://files.raycast.com/avatar",
         title: "Spotify Player",
         description: "Control Spotify",
         iconUrl: "https://files.raycast.com/icon",
         platforms: ["macOS", "Windows"],
         downloadCount: 42,
         commandCount: 2,
+        commands: [
+          {
+            name: "play",
+            title: "Play",
+            description: undefined,
+            mode: "no-view",
+          },
+          {
+            name: "bar",
+            title: "bar",
+            description: undefined,
+            mode: "menu-bar",
+          },
+        ],
+        categories: ["Media"],
+        createdAt: 100,
+        updatedAt: 200,
       },
+    );
+  });
+});
+
+describe("fetchStoreDetail", () => {
+  it("reads screenshots and changelog from the per-extension endpoint", async () => {
+    const seen: string[] = [];
+    const detail = await fetchStoreDetail("thomas", "hacker-news", {
+      fetch: jsonFetch(
+        {
+          metadata: ["https://files.raycast.com/a", "http://insecure", 3],
+          changelog: {
+            versions: [
+              { title: "Fixes", date: "2025-03-20", markdown: "- a" },
+              { date: "no title" },
+            ],
+          },
+        },
+        seen,
+      ),
+    });
+    assert.deepEqual(seen, [
+      "https://www.raycast.com/api/v1/extensions/thomas/hacker-news",
+    ]);
+    assert.deepEqual(detail, {
+      screenshots: ["https://files.raycast.com/a"],
+      changelog: [{ title: "Fixes", date: "2025-03-20", markdown: "- a" }],
+    });
+  });
+
+  it("rejects a reference that isn't a plain path segment", async () => {
+    await assert.rejects(
+      fetchStoreDetail("../x", "y", { fetch: jsonFetch({}) }),
+      /invalid/,
     );
   });
 });

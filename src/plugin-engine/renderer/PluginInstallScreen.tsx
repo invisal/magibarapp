@@ -9,10 +9,15 @@
  * row instead of Store results. (A raycast/extensions link still installs
  * from the Store — see `install.ts`'s `normalizeSource`.)
  *
+ * Master/detail, like Clipboard History: results on the left, the
+ * highlighted extension's details on the right (`StoreDetailPane`).
+ *
  * Registered as a core route (`"plugin-install"`) in `router/Outlet.tsx`.
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ListScreen } from "@renderer/shared/ui/ListScreen";
+import { Detail } from "@renderer/shared/ui/Detail";
+import { formatCount, StoreDetailPane } from "./StoreDetailPane";
 import type { FooterMenuItem } from "@renderer/shared/ui/Footer";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import type {
@@ -47,10 +52,13 @@ export function sourceFromQuery(query: string): TypedSource | null {
   return null;
 }
 
-function formatCount(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
-  return String(count);
+/** Whether Magibar can run any of its commands — a menu-bar-only
+ *  extension can't. A listing without commands gets the benefit of the
+ *  doubt (the install itself checks). */
+function hasRunnableCommand(result: StoreExtensionSearchResult): boolean {
+  return (
+    result.commands.length === 0 || result.commands.some((c) => c.supported)
+  );
 }
 
 function RowIcon({ src }: { src: string | null }): ReactNode {
@@ -144,6 +152,14 @@ export function PluginInstallScreen(): ReactNode {
       });
       return;
     }
+    if (row.kind === "store" && !hasRunnableCommand(row.result)) {
+      setStatus({
+        state: "error",
+        rowId: row.id,
+        message: "None of its commands can run in Magibar (menu bar only).",
+      });
+      return;
+    }
     const source: InstallSourceInput =
       row.kind === "store"
         ? { kind: "store", name: row.result.name, author: row.result.author }
@@ -206,7 +222,62 @@ export function PluginInstallScreen(): ReactNode {
         </Badge>
       );
     }
+    if (!hasRunnableCommand(result)) {
+      return <Badge tone="warn">Not supported</Badge>;
+    }
     return <Badge>↓ {formatCount(result.downloadCount)}</Badge>;
+  }
+
+  /** The pane's Status line: what's happening to this row, else whether
+   *  it's installed. */
+  function paneStatus(row: Row): ReactNode {
+    if (status.state !== "idle" && status.rowId === row.id) {
+      if (status.state === "installing") return status.message;
+      if (status.state === "error") {
+        return <span className="text-amber-500">{status.message}</span>;
+      }
+      return <span className="text-green-500">Installed</span>;
+    }
+    if (row.kind === "store" && row.result.installed) {
+      return <span className="text-green-500">Installed</span>;
+    }
+    if (row.kind === "store" && !hasRunnableCommand(row.result)) {
+      return (
+        <span className="text-amber-500">
+          Not supported — menu bar commands only
+        </span>
+      );
+    }
+    return undefined;
+  }
+
+  function detailPane(row: Row | null): ReactNode {
+    if (row?.kind === "source") {
+      return (
+        <Detail>
+          <Detail.Preview>
+            <Detail.Card
+              icon="📦"
+              title={row.label}
+              subtitle="Built from source on install — needs Node.js/npm if it has dependencies."
+            />
+          </Detail.Preview>
+          <Detail.Info>
+            <Detail.Row label="Status" value={paneStatus(row)} />
+            <Detail.Row
+              label="Source"
+              value={row.source.kind === "local" ? "Local folder" : "GitHub"}
+            />
+          </Detail.Info>
+        </Detail>
+      );
+    }
+    return (
+      <StoreDetailPane
+        result={row?.result ?? null}
+        status={row ? paneStatus(row) : undefined}
+      />
+    );
   }
 
   function menu(row: Row | null): FooterMenuItem[] {
@@ -265,11 +336,6 @@ export function PluginInstallScreen(): ReactNode {
             highlighted={highlighted}
             icon={<RowIcon src={row.result.iconDataUri} />}
             title={row.result.title}
-            subtitle={
-              row.result.description
-                ? `${row.result.authorName ?? row.result.author} · ${row.result.description}`
-                : (row.result.authorName ?? row.result.author)
-            }
             badge={statusFor(row)}
           />
         ) : (
@@ -281,12 +347,12 @@ export function PluginInstallScreen(): ReactNode {
               </span>
             }
             title={row.label}
-            subtitle="Builds from source — needs Node.js/npm if it has dependencies"
             badge={statusFor(row)}
           />
         )
       }
       onActivate={(row) => void install(row)}
+      detail={detailPane}
       menu={menu}
       onExit={pop}
       footerLabel={footerLabel}

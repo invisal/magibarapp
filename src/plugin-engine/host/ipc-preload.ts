@@ -14,6 +14,7 @@ import {
   type PluginInboundEvent,
   type PluginPreferencesPayload,
   type SearchStoreResponse,
+  type StoreDetailResponse,
 } from "./protocol.ts";
 
 /** Mirrors `PluginHostSource`'s `LaunchOptions`/`LaunchOutcome` — declared
@@ -73,6 +74,8 @@ export const pluginEngineApi = {
     ipcRenderer.invoke(PLUGIN_ENGINE_CHANNELS.launch, actionId, options),
   openStorePage: (author: string, name: string): Promise<void> =>
     ipcRenderer.invoke(PLUGIN_ENGINE_CHANNELS.openStorePage, author, name),
+  storeDetail: (author: string, name: string): Promise<StoreDetailResponse> =>
+    ipcRenderer.invoke(PLUGIN_ENGINE_CHANNELS.storeDetail, author, name),
 };
 
 export const pluginListApi = {
