@@ -57,6 +57,8 @@ export type ListHostParentMessage =
   | { type: "form-value-changed"; fieldId: string; value: unknown }
   | { type: "form-submit"; values: Record<string, unknown> }
   | { type: "pop" }
+  | { type: "selection-changed"; itemId: string | null }
+  | { type: "load-more" }
   | HostResponseMessage
   | { type: "dispose" };
 

@@ -152,13 +152,6 @@ export const actionRegistry = new ActionRegistry();
  *  serializer, same as `actionRegistry`. */
 class DropdownChangeStore {
   private handler: ((value: string) => void) | null = null;
-  /** What the user last picked, for an *uncontrolled* dropdown (one with no
-   *  explicit `value` prop, only `defaultValue`) — kept across commits
-   *  (unlike `handler`, which is rebuilt every commit) so `buildDropdown`
-   *  can keep echoing it back on the wire instead of the tree reverting to
-   *  `defaultValue` on every re-render once the extension's own `onChange`
-   *  state update triggers one (see that function's doc comment). */
-  private lastValue: string | null = null;
 
   reset(): void {
     this.handler = null;
@@ -169,12 +162,7 @@ class DropdownChangeStore {
   }
 
   invoke(value: string): void {
-    this.lastValue = value;
     this.handler?.(value);
-  }
-
-  getLastValue(): string | null {
-    return this.lastValue;
   }
 }
 
@@ -232,3 +220,66 @@ class FormSubmitStore {
 }
 
 export const formSubmitStore = new FormSubmitStore();
+
+/* ------------------------- list selection & paging ------------------------ */
+
+/** A `List`/`Grid`'s `pagination` prop, as Raycast (and `@raycast/utils`'
+ *  paginated `usePromise`/`useFetch`) passes it. */
+export interface Pagination {
+  onLoadMore: () => void;
+  hasMore: boolean;
+  pageSize?: number;
+}
+
+/**
+ * The top-level `List`/`Grid`'s `onSelectionChange` and
+ * `pagination.onLoadMore` — single slots like `dropdownChangeStore`, rebuilt
+ * on every render commit by `reconciler.ts`'s serializer.
+ */
+class ListCallbackStore {
+  private onSelectionChange: ((id: string | null) => void) | null = null;
+  private onLoadMore: (() => void) | null = null;
+  /** Ids the extension gave its items itself — a row without one reports
+   *  `null`, as in Raycast, rather than the serializer's fallback id. */
+  private ownIds = new Set<string>();
+  /** Last reported selection, kept across commits — the renderer re-reports
+   *  its highlight after every tree, but the extension hears each change
+   *  once. `undefined` until the first report. */
+  private lastSelection: string | null | undefined = undefined;
+
+  reset(): void {
+    this.onSelectionChange = null;
+    this.onLoadMore = null;
+    this.ownIds = new Set();
+  }
+
+  register(callbacks: {
+    onSelectionChange?: (id: string | null) => void;
+    onLoadMore?: () => void;
+  }): void {
+    this.onSelectionChange = callbacks.onSelectionChange ?? null;
+    this.onLoadMore = callbacks.onLoadMore ?? null;
+  }
+
+  /** A freshly started command: nothing reported yet. */
+  clearSelection(): void {
+    this.lastSelection = undefined;
+  }
+
+  registerItemId(id: string): void {
+    this.ownIds.add(id);
+  }
+
+  selectionChanged(itemId: string | null): void {
+    const id = itemId !== null && this.ownIds.has(itemId) ? itemId : null;
+    if (id === this.lastSelection) return;
+    this.lastSelection = id;
+    this.onSelectionChange?.(id);
+  }
+
+  loadMore(): void {
+    this.onLoadMore?.();
+  }
+}
+
+export const listCallbackStore = new ListCallbackStore();

@@ -94,6 +94,12 @@ port.on("message", (event: { data: ListHostParentMessage }) => {
     case "pop":
       instance?.handlePop();
       return;
+    case "selection-changed":
+      instance?.handleSelectionChanged(message.itemId);
+      return;
+    case "load-more":
+      instance?.handleLoadMore();
+      return;
     case "response":
       requests.handleResponse(message);
       return;

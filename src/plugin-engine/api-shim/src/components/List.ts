@@ -18,7 +18,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { searchTextStore } from "../host-bridge.ts";
+import { searchTextStore, type Pagination } from "../host-bridge.ts";
 import { FrameContext } from "../navigation.ts";
 import { Metadata } from "./DetailMetadata.ts";
 
@@ -115,11 +115,14 @@ function ListDropdownSection({ title, children }: ListDropdownSectionProps) {
 }
 
 export interface ListDropdownProps {
+  id?: string;
   tooltip?: string;
   placeholder?: string;
   value?: string;
   defaultValue?: string;
   isLoading?: boolean;
+  /** Remember the last pick across launches of the command. */
+  storeValue?: boolean;
   onChange?: (value: string) => void;
   children?: ReactNode;
 }
@@ -137,17 +140,28 @@ export interface ListDropdownProps {
  *  value back to whatever the user last picked once it diverges from the
  *  original default. */
 function ListDropdown({
+  id,
   tooltip,
   placeholder,
   value,
   defaultValue,
   isLoading,
+  storeValue,
   onChange,
   children,
 }: ListDropdownProps) {
   return createElement(
     "list-dropdown",
-    { tooltip, placeholder, value, defaultValue, isLoading, onChange },
+    {
+      id,
+      tooltip,
+      placeholder,
+      value,
+      defaultValue,
+      isLoading,
+      storeValue,
+      onChange,
+    },
     children,
   );
 }
@@ -160,6 +174,13 @@ export interface ListProps {
   searchBarAccessory?: ReactNode;
   onSearchTextChange?: (text: string) => void;
   filtering?: boolean | { keepSectionOrder?: boolean };
+  /** Show the highlighted item's `List.Item.Detail` beside the list. */
+  isShowingDetail?: boolean;
+  selectedItemId?: string;
+  onSelectionChange?: (id: string | null) => void;
+  pagination?: Pagination;
+  /** Debounce `onSearchTextChange` — applied by the renderer. */
+  throttle?: boolean;
   children?: ReactNode;
 }
 
@@ -169,6 +190,11 @@ function ListRoot({
   searchBarAccessory,
   onSearchTextChange,
   filtering,
+  isShowingDetail,
+  selectedItemId,
+  onSelectionChange,
+  pagination,
+  throttle,
   children,
 }: ListProps) {
   const frameId = useContext(FrameContext);
@@ -199,6 +225,11 @@ function ListRoot({
       isLoading,
       searchBarPlaceholder,
       filterQuery: filterEnabled ? searchText : "",
+      isShowingDetail,
+      selectedItemId,
+      onSelectionChange,
+      pagination,
+      throttle,
     },
     searchBarAccessory,
     children,

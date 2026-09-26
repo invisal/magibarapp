@@ -6,10 +6,18 @@
  * engine, since it's the one place that proves unmodified `@raycast/api`-style
  * JSX (hooks, state, conditional rendering) actually produces a correct tree.
  */
-import { afterEach, beforeEach, describe, it } from "node:test";
+import { after, afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createElement, useState } from "react";
-import { createPluginRoot, flushSync, type PluginRoot } from "./reconciler.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createElement, useEffect, useState } from "react";
+import {
+  createPluginRoot,
+  flushSync,
+  normalizeSvgDataUri,
+  type PluginRoot,
+} from "./reconciler.ts";
 import {
   actionRegistry,
   configureHostTransport,
@@ -28,6 +36,7 @@ import { Detail } from "./components/Detail.ts";
 import { Grid } from "./components/Grid.ts";
 import { Form } from "./components/Form.ts";
 import { unsupportedComponent } from "./unsupported.ts";
+import { configurePluginContext } from "./context.ts";
 import type {
   PluginDetailTree,
   PluginFormTree,
@@ -537,5 +546,127 @@ describe("reconciler", () => {
     assert.equal(transport.trees.length, 0);
     assert.equal(transport.errors.length, 1);
     assert.match(transport.errors[0], /Grid.*not supported/);
+  });
+
+  it("dispose unmounts synchronously, running the command's effect cleanups", () => {
+    let cleanedUp = false;
+    function Command() {
+      useEffect(
+        () => () => {
+          cleanedUp = true;
+        },
+        [],
+      );
+      return createElement(List, null);
+    }
+    const disposable = createPluginRoot();
+    disposable.render(createElement(Command));
+    disposable.dispose();
+    assert.equal(cleanedUp, true);
+  });
+
+  describe("List.Dropdown's initial value", () => {
+    const dir = mkdtempSync(join(tmpdir(), "magibar-reconciler-test-"));
+    after(() => rmSync(dir, { recursive: true, force: true }));
+    configurePluginContext({
+      pluginId: "fixture",
+      pluginTitle: "Fixture",
+      commandName: "cmd",
+      storageFilePath: join(dir, "storage.json"),
+      cacheFilePath: join(dir, "cache.json"),
+      supportPath: join(dir, "support"),
+      assetsPath: join(dir, "assets"),
+      preferenceValues: {},
+    });
+
+    /** A List that, like Hacker News, only loads once `onChange` names a
+     *  feed — its one row shows what it was told. */
+    function feedList(dropdownProps: Record<string, unknown>) {
+      return function Command() {
+        const [feed, setFeed] = useState("(none)");
+        return createElement(List, {
+          searchBarAccessory: createElement(List.Dropdown, {
+            ...dropdownProps,
+            onChange: (value: string) => setFeed(value),
+            children: ["front", "best"].map((value) =>
+              createElement(List.Dropdown.Item, {
+                key: value,
+                title: value,
+                value,
+              }),
+            ),
+          }),
+          children: [createElement(List.Item, { key: "a", title: feed })],
+        });
+      };
+    }
+
+    const settle = (): Promise<void> =>
+      new Promise((resolve) => setImmediate(resolve));
+    const shown = (): string | undefined =>
+      transport.lastTree?.sections[0].items[0].title;
+
+    it("tells onChange the defaultValue on mount", async () => {
+      root = createPluginRoot();
+      root.render(createElement(feedList({ defaultValue: "best" })));
+      await settle();
+      assert.equal(shown(), "best");
+      assert.equal(transport.lastTree?.searchBarAccessory?.value, "best");
+    });
+
+    it("falls back to the first item without a defaultValue", async () => {
+      root = createPluginRoot();
+      root.render(createElement(feedList({})));
+      await settle();
+      assert.equal(shown(), "front");
+    });
+
+    it("restores a storeValue dropdown's last pick on the next launch", async () => {
+      const props = { id: "feed", defaultValue: "front", storeValue: true };
+      root = createPluginRoot();
+      root.render(createElement(feedList(props)));
+      await settle();
+      flushSync(() => dropdownChangeStore.invoke("best"));
+      root.dispose();
+
+      root = createPluginRoot();
+      root.render(createElement(feedList(props)));
+      await settle();
+      assert.equal(shown(), "best");
+    });
+  });
+});
+
+describe("normalizeSvgDataUri", () => {
+  const decoded = (uri: string): string =>
+    decodeURIComponent(uri.slice(uri.indexOf(",") + 1));
+
+  it("adds the xmlns Chromium needs and URI-encodes the markup", () => {
+    const uri = normalizeSvgDataUri(
+      'data:image/svg+xml,<svg width="10"><rect fill="#f60"/></svg>',
+    );
+    assert.ok(!uri.includes("#"));
+    assert.equal(
+      decoded(uri),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10"><rect fill="#f60"/></svg>',
+    );
+  });
+
+  it("keeps an existing xmlns and decodes already-encoded markup first", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+    const uri = normalizeSvgDataUri(
+      `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`,
+    );
+    assert.equal(decoded(uri), svg);
+  });
+
+  it("leaves base64 and non-SVG values alone", () => {
+    for (const value of [
+      "data:image/svg+xml;base64,PHN2Zy8+",
+      "data:image/png;base64,AAAA",
+      "https://example.com/a.svg",
+    ]) {
+      assert.equal(normalizeSvgDataUri(value), value);
+    }
   });
 });

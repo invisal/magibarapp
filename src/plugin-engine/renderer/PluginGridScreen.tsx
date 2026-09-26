@@ -10,7 +10,14 @@ import type {
   PluginGridTree,
   PluginInboundEvent,
 } from "@plugin-engine/host/protocol";
-import { actionPanelToMenuItems, defaultAction } from "./map-tree";
+import {
+  actionPanelToMenuItems,
+  actionShortcuts,
+  defaultAction,
+} from "./map-tree";
+import { handleRowShortcut } from "./action-shortcuts";
+import { usePluginListEvents } from "./usePluginListEvents";
+import { isMac } from "@renderer/lib/shortcut";
 import { flattenGridTree, type PluginGridRow } from "./map-grid-tree";
 import { SearchBarDropdown } from "./PluginListScreen";
 
@@ -35,6 +42,7 @@ export function PluginGridScreen({
   onBack,
 }: PluginGridScreenProps): ReactNode {
   const rows = flattenGridTree(tree);
+  const events = usePluginListEvents(tree, sendEvent, onQueryChange);
 
   return (
     <ListScreen<PluginGridRow>
@@ -46,10 +54,9 @@ export function PluginGridScreen({
       getGroup={(row) => row.sectionTitle}
       serverFiltered
       inputValue={query}
-      onInputChange={(value) => {
-        onQueryChange(value);
-        sendEvent({ type: "search-text-changed", text: value });
-      }}
+      onInputChange={events.onInputChange}
+      onHighlightChange={events.onHighlightChange}
+      onEndReached={events.onEndReached}
       placeholder={tree.searchBarPlaceholder ?? title}
       inputSuffix={
         tree.searchBarAccessory ? (
@@ -73,8 +80,17 @@ export function PluginGridScreen({
         const action = defaultAction(row.actionPanel);
         if (action) invokeAction(action.id);
       }}
+      onInputKeyDown={(e, row) =>
+        handleRowShortcut(e, row?.actionPanel, invokeAction)
+      }
       menu={(row) =>
-        row ? actionPanelToMenuItems(row.actionPanel, invokeAction) : []
+        row
+          ? actionPanelToMenuItems(
+              row.actionPanel,
+              invokeAction,
+              actionShortcuts(row.actionPanel, "list", isMac()),
+            )
+          : []
       }
       loadingLabel="Loading…"
       emptyLabel={tree.emptyView?.title ?? "No results."}

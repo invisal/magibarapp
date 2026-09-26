@@ -50,13 +50,16 @@ import {
   formFieldChangeStore,
   formSubmitStore,
   getHostTransport,
+  listCallbackStore,
   searchTextStore,
+  type Pagination,
 } from "./host-bridge.ts";
 import { getPluginContext } from "./context.ts";
 import { NavigationRoot } from "./navigation.ts";
 import { filterHostChildren } from "./components/searchFilter.ts";
 import { iconGlyph, isRaycastIconName } from "./icon-glyphs.ts";
 import { toAccelerator } from "./apis/shortcut-format.ts";
+import { Cache } from "./apis/cache.ts";
 
 interface HostNode {
   type: string;
@@ -135,6 +138,7 @@ const hostConfig: ReactReconciler.HostConfig<
       dropdownChangeStore.reset();
       formFieldChangeStore.reset();
       formSubmitStore.reset();
+      listCallbackStore.reset();
       const tree = serializeContainer(container);
       if (tree) getHostTransport().sendRenderTree(tree);
     } catch (error) {
@@ -297,8 +301,11 @@ export function createPluginRoot(): PluginRoot {
         ),
       );
     },
+    /** Synchronous, like `render` — `list-host-process.ts` exits right
+     *  after, and the unmount (the command's effect cleanups) must have
+     *  run by then. */
     dispose() {
-      Reconciler.updateContainer(null, root, null, null);
+      flushSync(() => Reconciler.updateContainer(null, root, null, null));
     },
   };
 }
@@ -330,22 +337,50 @@ function text(value: unknown): string | undefined {
 function icon(value: unknown): string | undefined {
   if (typeof value === "string") {
     if (isRaycastIconName(value)) return iconGlyph(value);
-    return assetIcon(value) ?? (value || undefined);
+    return assetIcon(value) ?? (normalizeSvgDataUri(value) || undefined);
   }
   if (!value || typeof value !== "object") return undefined;
   const v = value as Record<string, unknown>;
   if ("source" in v) {
     const source = v.source;
-    if (source && typeof source === "object") {
-      const themed = source as { light?: unknown; dark?: unknown };
-      return icon(themed.light ?? themed.dark);
-    }
+    if (source && typeof source === "object") return themedIcon(source);
     return icon(source);
   }
   if ("fileIcon" in v) return icon(v.fileIcon);
   if ("value" in v) return icon(v.value);
-  if ("light" in v || "dark" in v) return icon(v.light ?? v.dark);
+  if ("light" in v || "dark" in v) return themedIcon(v);
   return undefined;
+}
+
+/** `{ light, dark }` — the variant for the current appearance. */
+function themedIcon(value: object): string | undefined {
+  const { light, dark } = value as { light?: unknown; dark?: unknown };
+  const isDark = getPluginContext().appearance === "dark";
+  return icon(isDark ? (dark ?? light) : (light ?? dark));
+}
+
+/**
+ * Extensions build `data:image/svg+xml,<svg …>` icons by hand (Hacker News
+ * draws its score badges that way). Raycast renders them, but Chromium only
+ * does with an `xmlns` on the root element and the markup URI-encoded — a
+ * raw `#fff` would otherwise end the URL at the `#`. Anything else passes
+ * through unchanged.
+ */
+export function normalizeSvgDataUri(value: string): string {
+  const match = /^data:image\/svg\+xml(;[^,]*)?,/i.exec(value);
+  if (!match || /;base64/i.test(match[1] ?? "")) return value;
+  let svg = value.slice(match[0].length);
+  if (!svg.includes("<")) {
+    try {
+      svg = decodeURIComponent(svg);
+    } catch {
+      return value;
+    }
+  }
+  if (!/<svg[^>]*\sxmlns=/i.test(svg)) {
+    svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 const IMAGE_MIME: Record<string, string> = {
@@ -362,7 +397,7 @@ const assetIconCache = new Map<string, string | null>();
 /**
  * Real Raycast resolves an icon string naming an image file against the
  * extension's `assets/` folder (`icon: "command-icon.png"`), or takes an
- * absolute path as-is. The renderer can only show `data:` images (its CSP),
+ * absolute path as-is. The renderer can't load `file:` images (its CSP),
  * so the file is inlined here, where the filesystem is reachable. Anything
  * that isn't an image file name passes through untouched.
  */
@@ -530,6 +565,7 @@ function buildGridTree(gridNode: HostNode): PluginGridTree {
   flushImplicit();
 
   return {
+    ...selectionAndPaging(gridNode),
     type: "grid",
     isLoading: Boolean(gridNode.props.isLoading),
     searchBarPlaceholder: str(gridNode.props.searchBarPlaceholder),
@@ -547,7 +583,7 @@ function buildGridItemNode(
   node: HostNode,
   fallbackId: string,
 ): PluginGridItemNode {
-  const id = str(node.props.id) ?? fallbackId;
+  const id = itemId(node, fallbackId);
   const actionPanel = node.children.find((c) => c.type === "action-panel");
   return {
     id,
@@ -623,12 +659,48 @@ function buildListTree(listNode: HostNode): PluginListTree {
     searchBarAccessory,
     sections,
     emptyView,
+    isShowingDetail: listNode.props.isShowingDetail === true,
+    ...selectionAndPaging(listNode),
+  };
+}
+
+/** Dropdowns whose initial value `onChange` has already been told. */
+const announcedDropdowns = new WeakSet<HostNode>();
+
+/** What the user last picked in each mounted dropdown — kept across commits
+ *  (unlike the registered handler, rebuilt every commit) so an
+ *  *uncontrolled* dropdown (`defaultValue` only) keeps echoing the pick on
+ *  the wire instead of reverting to `defaultValue` on every re-render. Per
+ *  node, so a pushed view's own dropdown starts fresh. */
+const pickedValues = new WeakMap<HostNode, string>();
+
+let storedValues: Cache | null = null;
+
+/** Where a `storeValue` dropdown's last pick lives — the plugin's own cache
+ *  file, in a namespace of ours, per command. */
+function storedValueKey(node: HostNode): {
+  cache: Cache;
+  key: string;
+} {
+  storedValues ??= new Cache({ namespace: "magibar-stored-values" });
+  const { commandName } = getPluginContext();
+  return {
+    cache: storedValues,
+    key: `${commandName}:dropdown:${str(node.props.id) ?? ""}`,
   };
 }
 
 function buildDropdown(node: HostNode): PluginDropdownNode {
   const onChange = node.props.onChange as ((value: string) => void) | undefined;
-  if (onChange) dropdownChangeStore.register(onChange);
+  const storeValue = node.props.storeValue === true;
+  dropdownChangeStore.register((value) => {
+    pickedValues.set(node, value);
+    if (storeValue) {
+      const { cache, key } = storedValueKey(node);
+      cache.set(key, value);
+    }
+    onChange?.(value);
+  });
 
   const sections: PluginDropdownSection[] = [];
   let implicitItems: PluginDropdownItemNode[] = [];
@@ -660,10 +732,26 @@ function buildDropdown(node: HostNode): PluginDropdownNode {
   // node's `defaultValue`, which never changes and would otherwise make the
   // wire value (and so the rendered `<select>`) revert on every re-render
   // the extension's own `onChange`-driven state update triggers.
+  const items = sections.flatMap((section) => section.items);
+  const stored = storeValue ? storedValueKey(node) : null;
+  const storedValue = stored?.cache.get(stored.key);
   const value =
     str(node.props.value) ??
-    dropdownChangeStore.getLastValue() ??
-    str(node.props.defaultValue);
+    pickedValues.get(node) ??
+    (items.some((item) => item.value === storedValue)
+      ? storedValue
+      : undefined) ??
+    str(node.props.defaultValue) ??
+    items[0]?.value;
+
+  // Raycast tells `onChange` the initial selection on mount — extensions
+  // commonly load their data from it (Hacker News fetches the picked feed
+  // only there), so without this they'd sit empty until the user picked.
+  // After the commit, so the handler registered above is the live one.
+  if (onChange && value !== undefined && !announcedDropdowns.has(node)) {
+    announcedDropdowns.add(node);
+    queueMicrotask(() => flushSync(() => dropdownChangeStore.invoke(value)));
+  }
 
   return {
     tooltip: str(node.props.tooltip),
@@ -682,8 +770,38 @@ function buildDropdownItem(node: HostNode): PluginDropdownItemNode {
   };
 }
 
+/** The `List`/`Grid` props that are callbacks or hints rather than content:
+ *  registers the callbacks (see `listCallbackStore`) and returns the tree's
+ *  share of them. */
+function selectionAndPaging(node: HostNode): {
+  selectedItemId?: string;
+  hasMore?: boolean;
+  throttle?: boolean;
+} {
+  const pagination = node.props.pagination as Pagination | undefined;
+  listCallbackStore.register({
+    onSelectionChange: node.props.onSelectionChange as
+      ((id: string | null) => void) | undefined,
+    onLoadMore: pagination?.onLoadMore,
+  });
+  return {
+    selectedItemId: str(node.props.selectedItemId),
+    hasMore: pagination ? Boolean(pagination.hasMore) : undefined,
+    throttle: node.props.throttle === true || undefined,
+  };
+}
+
+/** An item's wire id: the extension's own `id` (registered, so a selection
+ *  of it is reported back), else `fallbackId`. */
+function itemId(node: HostNode, fallbackId: string): string {
+  const own = str(node.props.id);
+  if (own === undefined) return fallbackId;
+  listCallbackStore.registerItemId(own);
+  return own;
+}
+
 function buildItemNode(node: HostNode, fallbackId: string): PluginListItemNode {
-  const id = str(node.props.id) ?? fallbackId;
+  const id = itemId(node, fallbackId);
   const actionPanel = node.children.find((c) => c.type === "action-panel");
   const detail = node.children.find((c) => c.type === "list-item-detail");
   return {

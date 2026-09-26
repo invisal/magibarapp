@@ -88,7 +88,7 @@ describe("runNoView", () => {
 });
 
 describe("startView", () => {
-  function mount(): {
+  function mount(bundle = "view.js"): {
     trees: PluginViewTree[];
     errors: string[];
     view: ReturnType<typeof startView>;
@@ -104,7 +104,7 @@ describe("startView", () => {
       clearSearchBar() {},
     };
     const view = startView(
-      input("view.js", { commandMode: "view", launchArguments: {} }),
+      input(bundle, { commandMode: "view", launchArguments: {} }),
       transport,
     );
     return { trees, errors, view };
@@ -171,6 +171,43 @@ describe("startView", () => {
     const detail = trees.at(-1) as PluginDetailTree;
     view.handleActionInvoked(detail.actionPanel!.sections[0].actions[0].id);
     assert.equal(trees.at(-1)!.type, "list");
+    view.dispose();
+  });
+
+  it("carries List selection, paging and throttle hints on the tree", () => {
+    const { trees, view } = mount("paged.js");
+    const tree = trees.at(-1) as PluginListTree;
+    assert.equal(tree.isShowingDetail, true);
+    assert.equal(tree.throttle, true);
+    assert.equal(tree.selectedItemId, "item-1");
+    assert.equal(tree.hasMore, true);
+    view.dispose();
+  });
+
+  it("loads the next page on load-more", () => {
+    const { trees, view } = mount("paged.js");
+    view.handleLoadMore();
+    const tree = trees.at(-1) as PluginListTree;
+    assert.equal(tree.sections[0].items.length, 5);
+    assert.equal(tree.hasMore, false);
+    view.dispose();
+  });
+
+  it("reports a selection once per change, and null for an id-less row", () => {
+    const { trees, view } = mount("paged.js");
+    const titles = (): string[] =>
+      (trees.at(-1) as PluginListTree).sections[0].items.map((i) => i.title);
+
+    view.handleSelectionChanged("item-0");
+    assert.equal(titles().at(-1), "selected: item-0");
+
+    const renders = trees.length;
+    view.handleSelectionChanged("item-0");
+    assert.equal(trees.length, renders, "a repeat report is dropped");
+
+    const idless = (trees.at(-1) as PluginListTree).sections[0].items.at(-1)!;
+    view.handleSelectionChanged(idless.id);
+    assert.equal(titles().at(-1), "selected: null");
     view.dispose();
   });
 });

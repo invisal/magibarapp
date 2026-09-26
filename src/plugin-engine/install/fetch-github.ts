@@ -101,10 +101,8 @@ export function splitFolderPath(path: string): string[] {
   return path.split("/").filter(Boolean);
 }
 
-/** Walks `git/trees` one path segment at a time — the same non-recursive
- *  shape `search-github.ts`'s `fetchExtensionFolderNames` already uses for
- *  one fixed segment, generalized to an arbitrary-depth path — to find the
- *  target folder's own sha without ever asking for a recursive listing of
+/** Walks `git/trees` one path segment at a time (non-recursive) to find
+ *  the target folder's own sha without ever asking for a recursive listing of
  *  anything bigger than that folder. */
 async function resolveFolderSha(
   owner: string,

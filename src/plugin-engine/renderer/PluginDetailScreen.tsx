@@ -16,7 +16,9 @@ import { Detail } from "@renderer/shared/ui/Detail";
 import { Footer } from "@renderer/shared/ui/Footer";
 import type { PluginDetailTree } from "@plugin-engine/host/protocol";
 import { renderDetailMarkdown, renderDetailMetadata } from "./map-detail-tree";
-import { actionPanelToMenuItems } from "./map-tree";
+import { actionPanelToMenuItems, actionShortcuts } from "./map-tree";
+import { usePanelShortcuts } from "./action-shortcuts";
+import { isMac } from "@renderer/lib/shortcut";
 
 function BackIcon() {
   return (
@@ -51,7 +53,12 @@ export function PluginDetailScreen({
   const [menuOpen, setMenuOpen] = useState(false);
   // Escape closes the actions menu first while it's open.
   useShortcut({ Escape: !menuOpen && back });
-  const menuItems = actionPanelToMenuItems(tree.actionPanel, invokeAction);
+  usePanelShortcuts(tree.actionPanel, "detail", invokeAction, !menuOpen);
+  const menuItems = actionPanelToMenuItems(
+    tree.actionPanel,
+    invokeAction,
+    actionShortcuts(tree.actionPanel, "detail", isMac()),
+  );
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">

@@ -11,7 +11,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { searchTextStore } from "../host-bridge.ts";
+import { searchTextStore, type Pagination } from "../host-bridge.ts";
 import { FrameContext } from "../navigation.ts";
 import { List } from "./List.ts";
 
@@ -82,6 +82,11 @@ export interface GridProps {
   inset?: "none" | "small" | "medium" | "large";
   onSearchTextChange?: (text: string) => void;
   filtering?: boolean | { keepSectionOrder?: boolean };
+  selectedItemId?: string;
+  onSelectionChange?: (id: string | null) => void;
+  pagination?: Pagination;
+  /** Debounce `onSearchTextChange` — applied by the renderer. */
+  throttle?: boolean;
   children?: ReactNode;
 }
 
@@ -103,6 +108,10 @@ function GridRoot({
   inset,
   onSearchTextChange,
   filtering,
+  selectedItemId,
+  onSelectionChange,
+  pagination,
+  throttle,
   children,
 }: GridProps) {
   const frameId = useContext(FrameContext);
@@ -131,6 +140,10 @@ function GridRoot({
       fit,
       inset,
       filterQuery: filterEnabled ? searchText : "",
+      selectedItemId,
+      onSelectionChange,
+      pagination,
+      throttle,
     },
     searchBarAccessory,
     children,

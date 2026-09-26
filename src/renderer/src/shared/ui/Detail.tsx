@@ -287,12 +287,8 @@ markdownRenderer.use({
  * Rendered markdown (headings, bold/italic, links, images, code, lists —
  * the common subset Raycast `Detail` commands actually use), sanitized
  * before it ever reaches `dangerouslySetInnerHTML` since it comes from
- * third-party extension code. Known v1 limitation: the launcher's CSP is
- * `img-src 'self' data:` (see `plugin-engine/install/search-github.ts`'s own
- * note on the same constraint), so a markdown image referencing a remote
- * `https:` URL won't load — only `data:`/local images will. Inlining remote
- * markdown images as data URIs, the way `search-github.ts` already does for
- * extension icons, is a real but separate feature, not done here.
+ * third-party extension code. Images load from `data:` and `https:` URLs
+ * (the launcher's CSP `img-src`); `file:` and plain `http:` ones don't.
  */
 function Markdown({ children }: { children: string }) {
   const html = useMemo(() => {

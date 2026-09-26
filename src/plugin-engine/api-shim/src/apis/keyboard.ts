@@ -1,16 +1,14 @@
 /**
  * `Keyboard`/`Keyboard.Shortcut.Common`. Only the `Common` presets, since
  * that's the one real extension usage seen so far (`Keyboard.Shortcut.Common.X`
- * as an `Action`'s `shortcut`) — best-effort reproductions of Raycast's own
- * presets, not guaranteed byte-identical modifier/key choices. That's fine:
- * these only ever feed `reconciler.ts`'s `toAccelerator`, which turns them
- * into a purely decorative kbd hint — never the action's actual behavior,
- * which still runs via click/Enter/⌘K regardless of what's shown.
+ * as an `Action`'s `shortcut`) — Raycast's own macOS presets. These feed
+ * `reconciler.ts`'s `toAccelerator` and are bound as real key chords by the
+ * plugin screens (see `renderer/map-tree.ts`'s `actionShortcutMap`).
  */
 import type { KeyboardShortcut } from "./shortcut-format.ts";
 
 const Common: Record<string, KeyboardShortcut> = {
-  Copy: { modifiers: ["cmd"], key: "c" },
+  Copy: { modifiers: ["cmd", "shift"], key: "c" },
   CopyDeeplink: { modifiers: ["cmd", "shift"], key: "c" },
   CopyName: { modifiers: ["cmd", "shift"], key: "." },
   CopyPath: { modifiers: ["cmd", "shift"], key: "," },
@@ -25,7 +23,7 @@ const Common: Record<string, KeyboardShortcut> = {
   Refresh: { modifiers: ["cmd"], key: "r" },
   Remove: { modifiers: ["ctrl"], key: "x" },
   RemoveAll: { modifiers: ["ctrl", "shift"], key: "x" },
-  ToggleQuickLook: { modifiers: [], key: "space" },
+  ToggleQuickLook: { modifiers: ["cmd"], key: "y" },
 };
 
 /** A preset this table doesn't have falls back to a harmless no-modifier

@@ -29,6 +29,7 @@ import {
   dropdownChangeStore,
   formFieldChangeStore,
   formSubmitStore,
+  listCallbackStore,
   searchTextStore,
   type HostTransport,
 } from "../api-shim/src/host-bridge.ts";
@@ -193,6 +194,8 @@ export interface RunningView {
   handleFormValueChanged(fieldId: string, value: unknown): void;
   handleFormSubmit(values: Record<string, unknown>): void;
   handlePop(): void;
+  handleSelectionChanged(itemId: string | null): void;
+  handleLoadMore(): void;
   dispose(): void;
 }
 
@@ -205,6 +208,7 @@ export function startView(
   configureContext(input);
   configureHostTransport(transport);
   searchTextStore.reset();
+  listCallbackStore.clearSelection();
 
   const Command = loadCommand(input.bundlePath) as ComponentType<LaunchProps>;
   const root = createPluginRoot();
@@ -244,6 +248,12 @@ export function startView(
     },
     handlePop() {
       flushSync(() => navigation.navigationController?.pop());
+    },
+    handleSelectionChanged(itemId) {
+      flushSync(() => listCallbackStore.selectionChanged(itemId));
+    },
+    handleLoadMore() {
+      flushSync(() => listCallbackStore.loadMore());
     },
     dispose() {
       root.dispose();

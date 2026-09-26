@@ -1,6 +1,7 @@
 import {
   cloneElement,
   forwardRef,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -358,7 +359,21 @@ interface ListScreenBaseProps<T> {
   /** Fires when the ⌘K / right-click menu opens or closes — for a live list
    *  that should hold still while a row's action menu is up. */
   onMenuOpenChange?: (open: boolean) => void;
+  /** Fires when the user nears the end of the list — scrolled close to the
+   *  bottom, the highlight among the last few rows, or rows too few to
+   *  fill the viewport — for loading the next page. It may fire more than
+   *  once for the same data, so the caller dedupes. */
+  onEndReached?: () => void;
+  /** Moves the highlight to the row with this id whenever the value
+   *  changes (once the row exists) — for a list that selects rows
+   *  programmatically. The user can still move the highlight afterwards.
+   *  List layout only. */
+  highlightId?: string;
 }
+
+/** How close to the end (rows, or row heights of scroll) counts as "the
+ *  end" for `onEndReached`. */
+const END_REACHED_ROWS = 5;
 
 type ListScreenProps<T> = ListScreenBaseProps<T>;
 
@@ -397,6 +412,8 @@ function ListScreenRoot<T>({
   isDisabled,
   onHighlightChange,
   onMenuOpenChange,
+  onEndReached,
+  highlightId,
 }: ListScreenProps<T>) {
   const { stack, pop } = useRouteStack();
   const controlled = inputValue !== undefined;
@@ -472,6 +489,60 @@ function ListScreenRoot<T>({
   // `data`) rather than landing on it before anything's been highlighted.
   const menuTarget =
     highlighted ?? ordered.find((item) => !isDisabled?.(item)) ?? null;
+
+  const onEndReachedRef = useRef(onEndReached);
+  onEndReachedRef.current = onEndReached;
+  const checkEndReached = useCallback((): void => {
+    const notify = onEndReachedRef.current;
+    const el = scrollContainerRef.current;
+    if (!notify || !el || ordered.length === 0) return;
+    const slack = END_REACHED_ROWS * LIST_SCREEN_ITEM_HEIGHT;
+    const nearBottom =
+      el.scrollTop + el.clientHeight >= el.scrollHeight - slack;
+    const index = highlighted ? ordered.indexOf(highlighted) : -1;
+    if (nearBottom || index >= ordered.length - END_REACHED_ROWS) notify();
+  }, [ordered, highlighted]);
+  // New data (a short first page) and keyboard moves both count, not only
+  // scrolling.
+  useEffect(checkEndReached, [checkEndReached]);
+
+  // `highlightId`: Base UI has no controlled highlight, so move it the way a
+  // user would — Home, then ArrowDown to the row (same approach as
+  // `Footer.Menu`'s return-to-row). Kept pending until the row shows up.
+  const pendingHighlightRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    pendingHighlightRef.current = highlightId;
+  }, [highlightId]);
+  useEffect(() => {
+    const target = pendingHighlightRef.current;
+    const input = inputRef.current;
+    if (target === undefined || !input || layout !== "list") return;
+    const index = ordered.findIndex((item) => getId(item) === target);
+    if (index < 0) return;
+    if (highlighted && getId(highlighted) === target) {
+      pendingHighlightRef.current = undefined;
+      return;
+    }
+    const raf = requestAnimationFrame(() => {
+      // Cleared only once it runs — a re-render cancelling this frame
+      // must leave the request for the rerun.
+      pendingHighlightRef.current = undefined;
+      const dispatch = (key: string) =>
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      dispatch("Home");
+      for (let i = 0; i < index; i++) dispatch("ArrowDown");
+    });
+    return () => cancelAnimationFrame(raf);
+    // `highlighted` is read, not tracked — only new data or a new target
+    // should trigger a move.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, ordered, getId, layout]);
 
   const gridContainerStyle: CSSProperties = {
     display: "grid",
@@ -609,6 +680,7 @@ function ListScreenRoot<T>({
         <div className="flex min-h-0 flex-1">
           <div
             ref={scrollContainerRef}
+            onScroll={onEndReached ? checkEndReached : undefined}
             className={cn(
               "min-h-0 overflow-y-auto p-2",
               detail ? "w-[38%] shrink-0 border-r border-border" : "flex-1",

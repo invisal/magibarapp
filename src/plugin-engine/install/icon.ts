@@ -1,7 +1,7 @@
 /**
- * Remote icon -> `data:` URI, for the Store results list. An icon has to be
- * inlined here, in main, since the launcher's CSP is `img-src 'self' data:`
- * and would never load a raw remote URL — same shape as
+ * Remote icon -> `data:` URI, for the Store results list — inlined here, in
+ * main, so it can be downscaled once and cached with the results instead of
+ * every row fetching a full-size image — same shape as
  * `quicklink/main/favicon.ts`'s `asDataUri`.
  *
  * Store icons are full-size PNGs (often 200KB+); `encode` lets the Electron

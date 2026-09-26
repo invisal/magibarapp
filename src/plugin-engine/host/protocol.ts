@@ -126,6 +126,17 @@ export interface PluginDropdownNode {
   sections: PluginDropdownSection[];
 }
 
+/** `List`/`Grid` selection and paging — the callbacks stay in the plugin
+ *  process; the renderer answers with `selection-changed` / `load-more`. */
+export interface PluginSelectionAndPaging {
+  /** Highlight this item (controlled selection). */
+  selectedItemId?: string;
+  /** `pagination.hasMore` — the renderer asks for more near the end. */
+  hasMore?: boolean;
+  /** Debounce `search-text-changed` before sending it. */
+  throttle?: boolean;
+}
+
 /** Fields every top-level view tree carries, whatever its `type`. */
 export interface PluginViewTreeBase {
   /** How many views `useNavigation().push()`/`Action.Push` have stacked on
@@ -137,13 +148,16 @@ export interface PluginViewTreeBase {
   searchText?: string;
 }
 
-export interface PluginListTree extends PluginViewTreeBase {
+export interface PluginListTree
+  extends PluginViewTreeBase, PluginSelectionAndPaging {
   type: "list";
   isLoading: boolean;
   searchBarPlaceholder?: string;
   searchBarAccessory?: PluginDropdownNode;
   sections: PluginListSection[];
   emptyView?: { title: string; description?: string; icon?: string };
+  /** Show the highlighted item's `detail` pane beside the list. */
+  isShowingDetail?: boolean;
 }
 
 export interface PluginDetailTree extends PluginViewTreeBase {
@@ -176,7 +190,8 @@ export type PluginGridAspectRatio =
 export type PluginGridFit = "contain" | "fill";
 export type PluginGridInset = "none" | "small" | "medium" | "large";
 
-export interface PluginGridTree extends PluginViewTreeBase {
+export interface PluginGridTree
+  extends PluginViewTreeBase, PluginSelectionAndPaging {
   type: "grid";
   isLoading: boolean;
   searchBarPlaceholder?: string;
@@ -314,6 +329,10 @@ export type PluginInboundEvent =
   /** Escape on a pushed view — pops the plugin's own navigation stack one
    *  level (only sent while the tree's `navigationDepth` > 0). */
   | { type: "pop" }
+  /** The highlighted row changed — its item id, or `null` for none. */
+  | { type: "selection-changed"; itemId: string | null }
+  /** The user reached the end of a list whose tree says `hasMore`. */
+  | { type: "load-more" }
   | { type: "dispose" };
 
 /**
@@ -431,8 +450,7 @@ export interface StoreExtensionSearchResult {
   authorName?: string;
   title: string;
   description?: string;
-  /** Already inlined as a `data:` URI (or `null`) — the renderer's CSP
-   *  forbids loading a raw remote image URL. */
+  /** Already downscaled and inlined as a `data:` URI (or `null`). */
   iconDataUri: string | null;
   /** `null` means the listing predates the field: macOS only. */
   platforms: string[] | null;

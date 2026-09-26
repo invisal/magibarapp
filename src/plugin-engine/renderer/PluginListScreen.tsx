@@ -20,11 +20,15 @@ import type {
 import {
   accessoriesBadge,
   actionPanelToMenuItems,
+  actionShortcuts,
   defaultAction,
   flattenTree,
   type PluginListRow,
 } from "./map-tree";
 import { renderDetailMarkdown, renderDetailMetadata } from "./map-detail-tree";
+import { handleRowShortcut } from "./action-shortcuts";
+import { usePluginListEvents } from "./usePluginListEvents";
+import { isMac } from "@renderer/lib/shortcut";
 
 export interface PluginListScreenProps {
   tree: PluginListTree | null;
@@ -47,10 +51,10 @@ export function PluginListScreen({
   onBack,
 }: PluginListScreenProps): ReactNode {
   const rows = flattenTree(tree);
-  // Only opt into the master/detail layout when at least one row actually
-  // uses `List.Item.Detail` — checked once per tree, not per row, so a plain
-  // List renders exactly as before (full width, no detail pane).
-  const hasDetail = rows?.some((row) => row.detail !== undefined) ?? false;
+  // Raycast shows `List.Item.Detail` only while the List says
+  // `isShowingDetail` — extensions toggle it to switch layouts.
+  const hasDetail = tree?.isShowingDetail === true;
+  const events = usePluginListEvents(tree, sendEvent, onQueryChange);
 
   return (
     <ListScreen<PluginListRow>
@@ -60,10 +64,10 @@ export function PluginListScreen({
       getGroup={(row) => row.sectionTitle}
       serverFiltered
       inputValue={query}
-      onInputChange={(value) => {
-        onQueryChange(value);
-        sendEvent({ type: "search-text-changed", text: value });
-      }}
+      onInputChange={events.onInputChange}
+      onHighlightChange={events.onHighlightChange}
+      onEndReached={events.onEndReached}
+      highlightId={tree?.selectedItemId}
       placeholder={tree?.searchBarPlaceholder ?? title}
       inputSuffix={
         tree?.searchBarAccessory ? (
@@ -88,8 +92,17 @@ export function PluginListScreen({
         const action = defaultAction(row.actionPanel);
         if (action) invokeAction(action.id);
       }}
+      onInputKeyDown={(e, row) =>
+        handleRowShortcut(e, row?.actionPanel, invokeAction)
+      }
       menu={(row) =>
-        row ? actionPanelToMenuItems(row.actionPanel, invokeAction) : []
+        row
+          ? actionPanelToMenuItems(
+              row.actionPanel,
+              invokeAction,
+              actionShortcuts(row.actionPanel, "list", isMac()),
+            )
+          : []
       }
       detail={
         hasDetail

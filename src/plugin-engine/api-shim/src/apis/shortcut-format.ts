@@ -15,14 +15,28 @@ export interface KeyboardShortcut {
   key: string;
 }
 
-export type ShortcutInput = string | KeyboardShortcut;
+/** Raycast's cross-platform form: one shortcut per OS. */
+export interface PlatformShortcut {
+  macOS?: KeyboardShortcut;
+  Windows?: KeyboardShortcut;
+}
 
-const MODIFIER_TOKENS: Record<string, string> = {
-  cmd: "cmd",
-  ctrl: "ctrl",
-  opt: "alt",
-  shift: "shift",
-};
+export type ShortcutInput = string | KeyboardShortcut | PlatformShortcut;
+
+/** Raycast for Windows reads a macOS-only shortcut's `cmd` as Ctrl. */
+function modifierToken(modifier: string, platform: NodeJS.Platform): string {
+  switch (modifier) {
+    case "cmd":
+      return platform === "darwin" ? "cmd" : "ctrl";
+    case "opt":
+    case "alt":
+      return "alt";
+    case "windows":
+      return "super";
+    default:
+      return modifier;
+  }
+}
 
 const KEY_TOKENS: Record<string, string> = {
   arrowUp: "up",
@@ -30,8 +44,15 @@ const KEY_TOKENS: Record<string, string> = {
   arrowLeft: "left",
   arrowRight: "right",
   return: "return",
-  delete: "delete",
+  enter: "enter",
+  // Raycast's "delete" is the ⌫ key; "deleteForward" is ⌦.
+  delete: "backspace",
   deleteForward: "delete",
+  backspace: "backspace",
+  pageUp: "pageup",
+  pageDown: "pagedown",
+  home: "home",
+  end: "end",
   escape: "escape",
   tab: "tab",
   space: "space",
@@ -44,11 +65,18 @@ function isKeyboardShortcut(value: unknown): value is KeyboardShortcut {
 /** `undefined` for anything that isn't a usable shortcut — a missing/absent
  *  `shortcut` prop stays absent on the wire rather than becoming a stray
  *  empty string. */
-export function toAccelerator(value: unknown): string | undefined {
+export function toAccelerator(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
   if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !("key" in value)) {
+    const perPlatform = value as PlatformShortcut;
+    value = platform === "darwin" ? perPlatform.macOS : perPlatform.Windows;
+  }
   if (!isKeyboardShortcut(value) || !value.key) return undefined;
-  const modifiers = (value.modifiers ?? []).map(
-    (modifier) => MODIFIER_TOKENS[modifier] ?? modifier,
+  const modifiers = (value.modifiers ?? []).map((modifier) =>
+    modifierToken(modifier, platform),
   );
   const key = KEY_TOKENS[value.key] ?? value.key;
   return [...modifiers, key].join("+");

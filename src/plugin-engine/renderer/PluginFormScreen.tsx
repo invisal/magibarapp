@@ -16,7 +16,9 @@ import type {
   PluginInboundEvent,
 } from "@plugin-engine/host/protocol";
 import { initialFormValues } from "./map-form-tree";
-import { actionPanelToMenuItems } from "./map-tree";
+import { actionPanelToMenuItems, actionShortcuts } from "./map-tree";
+import { usePanelShortcuts } from "./action-shortcuts";
+import { isMac } from "@renderer/lib/shortcut";
 
 function BackIcon() {
   return (
@@ -169,9 +171,11 @@ export function PluginFormScreen({
     }
   }
 
+  usePanelShortcuts(tree.actionPanel, "form", handleActionSelect, !menuOpen);
   const menuItems = actionPanelToMenuItems(
     tree.actionPanel,
     handleActionSelect,
+    actionShortcuts(tree.actionPanel, "form", isMac()),
   );
   const primaryAction = tree.actionPanel?.sections[0]?.actions[0];
 
