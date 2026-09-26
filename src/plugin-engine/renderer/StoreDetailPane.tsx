@@ -4,11 +4,15 @@
  * like (its Store screenshots), which of its commands Magibar can run, and
  * the Store's facts about it.
  *
+ * One scroll area, top to bottom, with the Install button in the header —
+ * selecting a row only shows it here; installing is this button (or Enter).
+ *
  * Search results already carry most of it; screenshots and the changelog
  * come from a per-extension lookup (`useStoreDetail`), fetched once the
  * highlight settles on a row.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { cn } from "cnfast";
 import { Detail } from "@renderer/shared/ui/Detail";
 import { relativeAge } from "@shared/format";
 import type {
@@ -67,7 +71,43 @@ function SectionTitle({ children }: { children: ReactNode }) {
   );
 }
 
-function Header({ result }: { result: StoreExtensionSearchResult }) {
+/** The pane's primary button — Install, Reinstall, progress, or why not. */
+export interface InstallAction {
+  label: string;
+  onClick?: () => void;
+  /** Greyed out, not clickable (installing, or can't install). */
+  disabled?: boolean;
+  /** Secondary look (Reinstall of an installed extension). */
+  secondary?: boolean;
+}
+
+export function InstallButton({ action }: { action: InstallAction }) {
+  return (
+    <button
+      type="button"
+      disabled={action.disabled}
+      onClick={action.onClick}
+      className={cn(
+        "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-opacity [-webkit-app-region:no-drag]",
+        action.secondary
+          ? "bg-input text-foreground hover:bg-item-selected"
+          : "bg-foreground text-background hover:opacity-90",
+        action.disabled && "cursor-default opacity-50 hover:opacity-50",
+      )}
+    >
+      <span className="max-w-40 truncate">{action.label}</span>
+      {!action.disabled && <span className="opacity-60">↵</span>}
+    </button>
+  );
+}
+
+function Header({
+  result,
+  action,
+}: {
+  result: StoreExtensionSearchResult;
+  action: InstallAction;
+}) {
   return (
     <div className="flex items-start gap-3">
       {result.iconDataUri ? (
@@ -81,7 +121,7 @@ function Header({ result }: { result: StoreExtensionSearchResult }) {
           🧩
         </span>
       )}
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold">{result.title}</div>
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-foreground-subtle">
           {result.authorAvatarUrl && (
@@ -99,6 +139,7 @@ function Header({ result }: { result: StoreExtensionSearchResult }) {
           </p>
         )}
       </div>
+      <InstallButton action={action} />
     </div>
   );
 }
@@ -175,72 +216,69 @@ function LatestChange({ detail }: { detail: LoadedDetail | null }) {
 export function StoreDetailPane({
   result,
   status,
+  action,
 }: {
   result: StoreExtensionSearchResult | null;
   /** Install progress / outcome for this extension, if any. */
   status?: ReactNode;
+  action: InstallAction;
 }): ReactNode {
   const detail = useStoreDetail(result);
   if (!result) {
     return (
       <Detail.Empty>
-        Search thousands of Raycast extensions — Enter installs one.
+        Search thousands of Raycast extensions — select one to see its details.
       </Detail.Empty>
     );
   }
   const now = Date.now();
   return (
-    <Detail>
-      <Detail.Preview align="start">
-        <div className="w-full">
-          <Header result={result} />
-          <Screenshots urls={detail?.screenshots ?? []} />
-          <Commands result={result} />
-          <LatestChange detail={detail} />
-        </div>
-      </Detail.Preview>
-      <Detail.Info>
-        <Detail.Row label="Status" value={status} />
-        <Detail.Row
-          label="Author"
-          value={result.authorName ?? result.author}
-          icon={result.authorAvatarUrl}
+    <div className="h-full overflow-y-auto p-4">
+      <Header result={result} action={action} />
+      <Screenshots urls={detail?.screenshots ?? []} />
+      <Commands result={result} />
+      <LatestChange detail={detail} />
+      <SectionTitle>Information</SectionTitle>
+      <Detail.Row label="Status" value={status} />
+      <Detail.Row
+        label="Author"
+        value={result.authorName ?? result.author}
+        icon={result.authorAvatarUrl}
+      />
+      <Detail.Row
+        label="Downloads"
+        value={result.downloadCount.toLocaleString()}
+      />
+      <Detail.Row
+        label="Platforms"
+        value={
+          result.supported
+            ? (result.platforms?.join(", ") ?? "macOS")
+            : `${result.platforms?.join(", ") ?? "macOS"} — not this platform`
+        }
+      />
+      {result.categories.length > 0 && (
+        <Detail.TagList
+          label="Categories"
+          items={result.categories.map((text) => ({ text }))}
         />
-        <Detail.Row
-          label="Downloads"
-          value={result.downloadCount.toLocaleString()}
-        />
-        <Detail.Row
-          label="Platforms"
-          value={
-            result.supported
-              ? (result.platforms?.join(", ") ?? "macOS")
-              : `${result.platforms?.join(", ") ?? "macOS"} — not this platform`
-          }
-        />
-        {result.categories.length > 0 && (
-          <Detail.TagList
-            label="Categories"
-            items={result.categories.map((text) => ({ text }))}
-          />
-        )}
-        <Detail.Row
-          label="Updated"
-          value={
-            result.updatedAt
-              ? relativeAge(result.updatedAt * 1000, now)
-              : undefined
-          }
-        />
-        <Detail.Row
-          label="Published"
-          value={
-            result.createdAt
-              ? relativeAge(result.createdAt * 1000, now)
-              : undefined
-          }
-        />
-      </Detail.Info>
-    </Detail>
+      )}
+      <Detail.Row
+        label="Updated"
+        value={
+          result.updatedAt
+            ? relativeAge(result.updatedAt * 1000, now)
+            : undefined
+        }
+      />
+      <Detail.Row
+        label="Published"
+        value={
+          result.createdAt
+            ? relativeAge(result.createdAt * 1000, now)
+            : undefined
+        }
+      />
+    </div>
   );
 }

@@ -10,14 +10,20 @@
  * from the Store — see `install.ts`'s `normalizeSource`.)
  *
  * Master/detail, like Clipboard History: results on the left, the
- * highlighted extension's details on the right (`StoreDetailPane`).
+ * selected extension's details on the right (`StoreDetailPane`). Clicking
+ * a row only selects it; installing is the pane's Install button, or Enter.
  *
  * Registered as a core route (`"plugin-install"`) in `router/Outlet.tsx`.
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ListScreen } from "@renderer/shared/ui/ListScreen";
 import { Detail } from "@renderer/shared/ui/Detail";
-import { formatCount, StoreDetailPane } from "./StoreDetailPane";
+import {
+  formatCount,
+  InstallButton,
+  StoreDetailPane,
+  type InstallAction,
+} from "./StoreDetailPane";
 import type { FooterMenuItem } from "@renderer/shared/ui/Footer";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import type {
@@ -93,6 +99,10 @@ export function PluginInstallScreen(): ReactNode {
   );
   const [searchError, setSearchError] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ state: "idle" });
+  // The row shown in the pane — tracked here rather than read from
+  // `ListScreen`'s highlight, which a plain click can momentarily clear
+  // (same approach as Clipboard History).
+  const [selected, setSelected] = useState<Row | null>(null);
   const typedSource = sourceFromQuery(query);
 
   useEffect(() => {
@@ -141,6 +151,17 @@ export function PluginInstallScreen(): ReactNode {
       result,
     }));
   }, [typedSource, results]);
+
+  // Keep `selected` pointing at a row that exists, and at its current
+  // object (an install flips `installed`).
+  useEffect(() => {
+    const list = rows ?? [];
+    const current = selected
+      ? (list.find((r) => r.id === selected.id) ?? null)
+      : null;
+    if (current !== selected) setSelected(current ?? list[0] ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   async function install(row: Row): Promise<void> {
     if (status.state === "installing") return;
@@ -251,31 +272,62 @@ export function PluginInstallScreen(): ReactNode {
     return undefined;
   }
 
+  /** The pane's button for `row`: what Enter would do, or why it can't. */
+  function installAction(row: Row): InstallAction {
+    if (status.state === "installing") {
+      return status.rowId === row.id
+        ? { label: status.message, disabled: true }
+        : { label: "Install", disabled: true };
+    }
+    if (row.kind === "store") {
+      if (!row.result.supported || !hasRunnableCommand(row.result)) {
+        return { label: "Not Supported", disabled: true };
+      }
+      if (row.result.installed) {
+        return {
+          label: "Reinstall",
+          secondary: true,
+          onClick: () => void install(row),
+        };
+      }
+    }
+    return { label: "Install", onClick: () => void install(row) };
+  }
+
   function detailPane(row: Row | null): ReactNode {
     if (row?.kind === "source") {
       return (
-        <Detail>
-          <Detail.Preview>
-            <Detail.Card
-              icon="📦"
-              title={row.label}
-              subtitle="Built from source on install — needs Node.js/npm if it has dependencies."
-            />
-          </Detail.Preview>
-          <Detail.Info>
+        <div className="h-full overflow-y-auto p-4">
+          <div className="flex items-start gap-3">
+            <span className="grid h-12 w-12 shrink-0 place-items-center text-3xl">
+              📦
+            </span>
+            <div className="min-w-0 flex-1 text-xs">
+              <div className="text-sm font-semibold break-all">
+                {row.source.kind === "local" ? row.source.path : row.label}
+              </div>
+              <p className="mt-1.5 text-foreground-subtle">
+                Built from source on install — needs Node.js/npm if it has
+                dependencies.
+              </p>
+            </div>
+            <InstallButton action={installAction(row)} />
+          </div>
+          <div className="mt-4">
             <Detail.Row label="Status" value={paneStatus(row)} />
             <Detail.Row
               label="Source"
               value={row.source.kind === "local" ? "Local folder" : "GitHub"}
             />
-          </Detail.Info>
-        </Detail>
+          </div>
+        </div>
       );
     }
     return (
       <StoreDetailPane
         result={row?.result ?? null}
         status={row ? paneStatus(row) : undefined}
+        action={row ? installAction(row) : { label: "Install", disabled: true }}
       />
     );
   }
@@ -330,17 +382,17 @@ export function PluginInstallScreen(): ReactNode {
         }
       }}
       placeholder="Search Raycast Store, or paste a GitHub URL / folder path…"
-      renderItem={(row, { highlighted }) =>
+      renderItem={(row) =>
         row.kind === "store" ? (
           <ListScreen.Item
-            highlighted={highlighted}
+            highlighted={row.id === selected?.id}
             icon={<RowIcon src={row.result.iconDataUri} />}
             title={row.result.title}
             badge={statusFor(row)}
           />
         ) : (
           <ListScreen.Item
-            highlighted={highlighted}
+            highlighted={row.id === selected?.id}
             icon={
               <span className="grid h-6 w-6 place-items-center text-base">
                 📦
@@ -351,9 +403,22 @@ export function PluginInstallScreen(): ReactNode {
           />
         )
       }
-      onActivate={(row) => void install(row)}
-      detail={detailPane}
-      menu={menu}
+      // A click only selects the row (Base UI also turns Enter into a
+      // synthetic click, so this must stay inert); Enter installs, in
+      // `onInputKeyDown`, as does the pane's Install button.
+      onActivate={(row) => setSelected(row)}
+      onHighlightChange={(row) => {
+        if (row) setSelected(row);
+      }}
+      onInputKeyDown={(e) => {
+        if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+        e.preventDefault();
+        const action = selected ? installAction(selected) : null;
+        action?.onClick?.();
+      }}
+      detail={() => detailPane(selected)}
+      menu={() => menu(selected)}
       onExit={pop}
       footerLabel={footerLabel}
       loadingLabel="Searching the Raycast Store…"
