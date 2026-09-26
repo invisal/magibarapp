@@ -5,6 +5,12 @@
  * knows which plugin an instance belongs to). One instance per open plugin
  * screen — killed on detach, no cross-session caching.
  *
+ * An instance lives exactly as long as its screen: until the screen
+ * unmounts (`detach`) or the renderer that owns it goes away
+ * (`detachOwner` — a reload or crash, which never unmounts anything). There
+ * is deliberately no idle timeout: a plugin screen stays mounted while the
+ * launcher is hidden, and must still work when the user comes back to it.
+ *
  * Not unit-testable (`utilityProcess` only exists inside real Electron) —
  * see `list-host-process.ts`'s doc comment.
  */
@@ -23,11 +29,6 @@ import type {
   PluginInboundEvent,
 } from "./protocol.ts";
 
-/** No inbound event/effect for 5 minutes -> treat the instance as leaked and
- *  kill it — a backstop, not the primary lifecycle (that's `detach()`, called
- *  when the renderer's plugin screen unmounts). */
-const IDLE_TIMEOUT_MS = 5 * 60_000;
-
 export interface ListHostHandlers {
   /** Messages for the instance's own renderer screen. */
   onMessage(message: PluginHostMessage): void;
@@ -38,8 +39,9 @@ export interface ListHostHandlers {
 
 interface Instance {
   pluginId: string;
+  /** `webContents.id` of the renderer showing it. */
+  ownerId: number;
   process: UtilityProcess;
-  idleTimer: ReturnType<typeof setTimeout>;
   handlers: ListHostHandlers;
 }
 
@@ -48,6 +50,7 @@ class ListHostManager {
 
   spawn(
     instanceId: string,
+    ownerId: number,
     input: ListStartInput,
     handlers: ListHostHandlers,
   ): void {
@@ -76,14 +79,10 @@ class ListHostManager {
       console.error(logPrefix, chunk.toString().trimEnd()),
     );
 
-    const idleTimer = setTimeout(
-      () => this.detach(instanceId),
-      IDLE_TIMEOUT_MS,
-    );
     this.instances.set(instanceId, {
       pluginId: input.pluginId,
+      ownerId,
       process: child,
-      idleTimer,
       handlers,
     });
 
@@ -111,7 +110,6 @@ class ListHostManager {
       this.detach(instanceId);
       return;
     }
-    this.bumpIdle(instanceId);
     this.post(instanceId, event);
   }
 
@@ -126,18 +124,30 @@ class ListHostManager {
   }
 
   /** Every running instance of one plugin — before it's reinstalled or
-   *  uninstalled, so nothing holds its files open. */
-  detachPlugin(pluginId: string): void {
+   *  uninstalled (so nothing holds its files open), or after its
+   *  preferences change (it was started with the old values). `reason` is
+   *  what its screen shows instead. */
+  detachPlugin(
+    pluginId: string,
+    reason = "This extension was updated or removed — reopen the command.",
+  ): void {
     for (const [instanceId, instance] of this.instances) {
       if (instance.pluginId === pluginId) {
         instance.handlers.onMessage({
           type: "error",
           instanceId,
-          message:
-            "This extension was updated or removed — reopen the command.",
+          message: reason,
         });
         this.detach(instanceId);
       }
+    }
+  }
+
+  /** Every instance a renderer owns — when it reloads, crashes or is
+   *  destroyed, its screens are gone without ever unmounting. */
+  detachOwner(ownerId: number): void {
+    for (const [instanceId, instance] of this.instances) {
+      if (instance.ownerId === ownerId) this.detach(instanceId);
     }
   }
 
@@ -147,7 +157,6 @@ class ListHostManager {
   ): Promise<void> {
     const instance = this.instances.get(instanceId);
     if (!instance) return;
-    this.bumpIdle(instanceId);
 
     switch (message.type) {
       case "render":
@@ -221,16 +230,6 @@ class ListHostManager {
     this.instances.get(instanceId)?.process.postMessage(message);
   }
 
-  private bumpIdle(instanceId: string): void {
-    const instance = this.instances.get(instanceId);
-    if (!instance) return;
-    clearTimeout(instance.idleTimer);
-    instance.idleTimer = setTimeout(
-      () => this.detach(instanceId),
-      IDLE_TIMEOUT_MS,
-    );
-  }
-
   /** Kill every running instance — called from `app.on("will-quit")`, same
    *  as the Clipboard History / Activity Monitor pollers' own cleanup. */
   disposeAll(): void {
@@ -239,9 +238,6 @@ class ListHostManager {
   }
 
   private cleanup(instanceId: string): void {
-    const instance = this.instances.get(instanceId);
-    if (!instance) return;
-    clearTimeout(instance.idleTimer);
     this.instances.delete(instanceId);
   }
 }

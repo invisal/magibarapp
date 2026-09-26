@@ -57,6 +57,23 @@ function progressTo(
   };
 }
 
+/** Renderers whose teardown already detaches their plugin instances. */
+const watchedOwners = new WeakSet<WebContents>();
+
+/** A reload, crash or destroyed window drops every plugin screen without
+ *  unmounting it — kill the instances that were showing there. */
+function watchOwner(sender: WebContents): void {
+  if (watchedOwners.has(sender)) return;
+  watchedOwners.add(sender);
+  const id = sender.id;
+  const release = (): void => listHostManager.detachOwner(id);
+  sender.on("render-process-gone", release);
+  sender.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) release();
+  });
+  sender.once("destroyed", release);
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -175,7 +192,10 @@ export function registerPluginEngineIpc(
       source.registry.setPreferenceValues(pluginId, values);
       source.reloadRegistry();
       // Running instances were started with the old values.
-      listHostManager.detachPlugin(pluginId);
+      listHostManager.detachPlugin(
+        pluginId,
+        "The extension's preferences changed — reopen the command.",
+      );
       return true;
     },
   );
@@ -221,11 +241,17 @@ export function registerPluginEngineIpc(
   ipc.on(
     PLUGIN_ENGINE_CHANNELS.listAttach,
     (event, instanceId: string, actionId: string) => {
-      source.attachListInstance(instanceId, actionId, (message) => {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send(PLUGIN_ENGINE_CHANNELS.listMessage, message);
-        }
-      });
+      watchOwner(event.sender);
+      source.attachListInstance(
+        instanceId,
+        actionId,
+        event.sender.id,
+        (message) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(PLUGIN_ENGINE_CHANNELS.listMessage, message);
+          }
+        },
+      );
     },
   );
 

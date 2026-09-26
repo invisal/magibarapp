@@ -229,7 +229,7 @@ export class PluginHostSource implements ActionSource {
   }
 
   /** A plugin asset (`icon: "extension-icon.png"`) as a small `data:` URI —
-   *  the launcher's CSP only allows `data:` images. */
+   *  the launcher's CSP doesn't allow `file:` images. */
   iconFor(entry: PluginRegistryEntry, iconName?: string): string | null {
     const name = iconName ?? entry.icon;
     if (!name) return null;
@@ -536,6 +536,7 @@ export class PluginHostSource implements ActionSource {
   attachListInstance(
     instanceId: string,
     actionId: string,
+    ownerId: number,
     onMessage: (message: PluginHostMessage) => void,
   ): void {
     const resolved = this.commands.get(actionId);
@@ -557,6 +558,7 @@ export class PluginHostSource implements ActionSource {
     }
     listHostManager.spawn(
       instanceId,
+      ownerId,
       this.runInput(entry, commandName, options),
       {
         onMessage,
