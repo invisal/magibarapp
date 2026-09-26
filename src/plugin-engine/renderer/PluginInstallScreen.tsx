@@ -407,9 +407,14 @@ export function PluginInstallScreen(): ReactNode {
       // synthetic click, so this must stay inert); Enter installs, in
       // `onInputKeyDown`, as does the pane's Install button.
       onActivate={(row) => setSelected(row)}
-      onHighlightChange={(row) => {
-        if (row) setSelected(row);
+      // Only a user's own move counts: Base UI re-highlights the first row
+      // on its own (reason "none") whenever the search box takes focus.
+      onHighlightChange={(row, reason) => {
+        if (row && reason !== "none") setSelected(row);
       }}
+      // …and a click moves Base UI's highlight onto the clicked row, so
+      // arrow keys carry on from there.
+      highlightId={selected?.id}
       onInputKeyDown={(e) => {
         if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
         if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;

@@ -32,10 +32,11 @@ import {
   type StoreDetailResponse,
 } from "./protocol.ts";
 import { reinstallSource } from "../registry.ts";
-import type {
-  LaunchOptions,
-  LaunchOutcome,
-  PluginHostSource,
+import {
+  commandActionId,
+  type LaunchOptions,
+  type LaunchOutcome,
+  type PluginHostSource,
 } from "./PluginHostSource.ts";
 
 /** Store icons are full-size PNGs — downscale before they cross IPC. */
@@ -194,6 +195,22 @@ export function registerPluginEngineIpc(
           storeName:
             entry.sourceRef.kind === "store" ? entry.sourceRef.name : undefined,
           commandCount: entry.commands.length,
+          commands: entry.commands.map((command) => ({
+            actionId: commandActionId(entry.id, command.name),
+            title: command.title,
+            subtitle: command.subtitleOverride ?? command.subtitle,
+            mode: command.mode,
+            iconDataUri: command.icon
+              ? source.iconFor(entry, command.icon)
+              : null,
+          })),
+          installedAt: entry.installedAt,
+          sourceLocation:
+            entry.sourceRef.kind === "github"
+              ? entry.sourceRef.url
+              : entry.sourceRef.kind === "local"
+                ? entry.sourceRef.path
+                : undefined,
           hasPreferences:
             (entry.preferences?.length ?? 0) > 0 ||
             entry.commands.some((c) => (c.preferences?.length ?? 0) > 0),

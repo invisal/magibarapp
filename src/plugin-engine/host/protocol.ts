@@ -594,7 +594,22 @@ export interface InstalledPluginSummary {
   /** The Store listing name, for a Store install (updates re-resolve it). */
   storeName?: string;
   commandCount: number;
+  commands: InstalledPluginCommand[];
   hasPreferences: boolean;
   missingRequiredPreferences: boolean;
+  iconDataUri: string | null;
+  /** Epoch ms. */
+  installedAt: number;
+  /** Where it came from — a GitHub URL or folder path; `undefined` for a
+   *  Store install (`storeName`/`author` say which). */
+  sourceLocation?: string;
+}
+
+export interface InstalledPluginCommand {
+  /** The launcher action id (`plugin:<id>:<command>`) — launches it. */
+  actionId: string;
+  title: string;
+  subtitle?: string;
+  mode: "view" | "no-view";
   iconDataUri: string | null;
 }

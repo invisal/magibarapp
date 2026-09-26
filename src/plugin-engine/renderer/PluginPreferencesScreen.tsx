@@ -119,18 +119,22 @@ function missingRequired(
   return missing;
 }
 
-function FieldsForm({
+export function FieldsForm({
   specs,
   values,
   onChange,
   errors,
   onSubmit,
+  autoFocusFirst = true,
 }: {
   specs: FieldSpec[];
   values: Record<string, unknown>;
   onChange: (name: string, value: unknown) => void;
   errors: Set<string>;
   onSubmit: () => void;
+  /** Off where the form sits beside a list whose search box keeps focus
+   *  (Manage Extensions' pane). */
+  autoFocusFirst?: boolean;
 }): ReactNode {
   let lastSection: string | undefined;
   return (
@@ -170,7 +174,7 @@ function FieldsForm({
                 />
               ) : (
                 <Form.Input
-                  autoFocus={index === 0}
+                  autoFocus={autoFocusFirst && index === 0}
                   type={spec.kind === "password" ? "password" : "text"}
                   value={String(value ?? "")}
                   placeholder={spec.placeholder}
@@ -204,6 +208,71 @@ async function continueLaunch(
   return null;
 }
 
+/**
+ * One extension's preferences as an editable form: loads them, tracks the
+ * edits, validates required fields and saves. Shared by the preferences
+ * screen and Manage Extensions' pane.
+ */
+export function usePluginPreferences(pluginId: string) {
+  const [data, setData] = useState<PluginPreferencesPayload | null>(null);
+  const [values, setValues] = useState<Record<string, unknown>>({});
+  const [saved, setSaved] = useState<Record<string, unknown>>({});
+  const [errors, setErrors] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    setErrors(new Set());
+    void window.api.pluginEngine.getPreferences(pluginId).then((loaded) => {
+      if (!live || !loaded) return;
+      setData(loaded);
+      const initial: Record<string, unknown> = {};
+      for (const field of loaded.fields) {
+        initial[field.name] = initialValue(
+          preferenceSpec(field),
+          loaded.values[field.name],
+          field.default,
+        );
+      }
+      setValues(initial);
+      setSaved(initial);
+    });
+    return () => {
+      live = false;
+    };
+  }, [pluginId]);
+
+  const specs = data?.fields.map(preferenceSpec) ?? [];
+  const dirty = specs.some((spec) => values[spec.name] !== saved[spec.name]);
+
+  /** `true` once saved; `false` when a required field is blank. */
+  async function save(): Promise<boolean> {
+    if (busy || !data) return false;
+    const missing = missingRequired(specs, values);
+    setErrors(missing);
+    if (missing.size > 0) return false;
+    setBusy(true);
+    await window.api.pluginEngine.setPreferences(pluginId, values);
+    setSaved(values);
+    setBusy(false);
+    return true;
+  }
+
+  return {
+    data,
+    specs,
+    values,
+    errors,
+    busy,
+    dirty,
+    setValue(name: string, value: unknown): void {
+      setValues((current) => ({ ...current, [name]: value }));
+    },
+    save,
+  };
+}
+
 export function PluginPreferencesScreen(payload: unknown): ReactNode {
   const p = payload as PluginPreferencesRoutePayload | undefined;
   if (!p?.pluginId) return null;
@@ -216,44 +285,17 @@ function PreferencesForm({
   justInstalled,
 }: PluginPreferencesRoutePayload): ReactNode {
   const { pop, replace, reset } = useRouteStack();
-  const [data, setData] = useState<PluginPreferencesPayload | null>(null);
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  const [errors, setErrors] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  const prefs = usePluginPreferences(pluginId);
+  const { data, specs, values, errors, busy } = prefs;
   const [failure, setFailure] = useState<string | null>(null);
 
-  useEffect(() => {
-    void window.api.pluginEngine.getPreferences(pluginId).then((loaded) => {
-      if (!loaded) return;
-      setData(loaded);
-      const initial: Record<string, unknown> = {};
-      for (const field of loaded.fields) {
-        initial[field.name] = initialValue(
-          preferenceSpec(field),
-          loaded.values[field.name],
-          field.default,
-        );
-      }
-      setValues(initial);
-    });
-  }, [pluginId]);
-
-  const specs = data?.fields.map(preferenceSpec) ?? [];
-
   async function save(): Promise<void> {
-    if (busy || !data) return;
-    const missing = missingRequired(specs, values);
-    setErrors(missing);
-    if (missing.size > 0) return;
-    setBusy(true);
-    await window.api.pluginEngine.setPreferences(pluginId, values);
+    if (!(await prefs.save())) return;
     if (continueWith) {
       const error = await continueLaunch(continueWith, { replace, reset });
-      setBusy(false);
       if (error) setFailure(error);
       return;
     }
-    setBusy(false);
     pop();
   }
 
@@ -287,9 +329,7 @@ function PreferencesForm({
               specs={specs}
               values={values}
               errors={errors}
-              onChange={(name, value) =>
-                setValues((current) => ({ ...current, [name]: value }))
-              }
+              onChange={prefs.setValue}
               onSubmit={() => void save()}
             />
           </>

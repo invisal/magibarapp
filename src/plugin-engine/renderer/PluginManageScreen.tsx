@@ -1,14 +1,23 @@
 /**
- * "Manage Extensions" — every installed plugin, with Configure (its
- * preferences), Update (re-download from the Store; source installs rebuild
- * from where they came from) and Uninstall in the ⌘K menu. Registered as the
- * `"plugin-manage"` core route in `router/Outlet.tsx`.
+ * "Manage Extensions" — every installed plugin, master/detail like Search
+ * Raycast Store: the list on the left, the selected extension on the right
+ * (`InstalledDetailPane`) with its settings edited in place, its commands,
+ * and Update / Uninstall. Clicking a row only selects it; Enter jumps into
+ * its settings. Registered as the `"plugin-manage"` core route in
+ * `router/Outlet.tsx`.
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { ListScreen } from "@renderer/shared/ui/ListScreen";
 import type { FooterMenuItem } from "@renderer/shared/ui/Footer";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import type { InstalledPluginSummary } from "@plugin-engine/host/protocol";
+import { InstalledDetailPane } from "./InstalledDetailPane";
 
 type Status =
   | { state: "idle" }
@@ -16,21 +25,32 @@ type Status =
   | { state: "done"; message: string }
   | { state: "error"; message: string };
 
-const SOURCE_LABEL: Record<InstalledPluginSummary["source"], string> = {
-  store: "Raycast Store",
-  github: "GitHub",
-  local: "Local folder",
-};
-
 export function PluginManageScreen(): ReactNode {
   const { push, pop } = useRouteStack();
   const [plugins, setPlugins] = useState<InstalledPluginSummary[] | null>(null);
   const [status, setStatus] = useState<Status>({ state: "idle" });
+  const [query, setQuery] = useState("");
+  // The extension shown in the pane — tracked here, not read from
+  // `ListScreen`'s highlight, which a plain click can momentarily clear
+  // (same approach as Clipboard History).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     void window.api.pluginEngine.listInstalled().then(setPlugins);
   }, []);
   useEffect(refresh, [refresh]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const all = plugins ?? [];
+    if (!q) return all;
+    return all.filter((plugin) =>
+      `${plugin.title} ${plugin.description ?? ""}`.toLowerCase().includes(q),
+    );
+  }, [plugins, query]);
+
+  const selected =
+    visible.find((plugin) => plugin.id === selectedId) ?? visible[0] ?? null;
 
   function configure(plugin: InstalledPluginSummary): void {
     push({ name: "plugin-preferences", payload: { pluginId: plugin.id } });
@@ -138,11 +158,13 @@ export function PluginManageScreen(): ReactNode {
     <ListScreen<InstalledPluginSummary>
       data={plugins}
       getId={(plugin) => plugin.id}
-      getSearchText={(plugin) => `${plugin.title} ${plugin.description ?? ""}`}
+      serverFiltered
+      inputValue={query}
+      onInputChange={setQuery}
       placeholder="Search installed extensions…"
-      renderItem={(plugin, { highlighted }) => (
+      renderItem={(plugin) => (
         <ListScreen.Item
-          highlighted={highlighted}
+          highlighted={plugin.id === selected?.id}
           icon={
             plugin.iconDataUri ? (
               <img
@@ -157,13 +179,6 @@ export function PluginManageScreen(): ReactNode {
             )
           }
           title={plugin.title}
-          subtitle={[
-            `${plugin.commandCount} command${plugin.commandCount === 1 ? "" : "s"}`,
-            SOURCE_LABEL[plugin.source],
-            plugin.author,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
           badge={
             plugin.missingRequiredPreferences ? (
               <span className="text-xs text-amber-500">Needs setup</span>
@@ -171,10 +186,37 @@ export function PluginManageScreen(): ReactNode {
           }
         />
       )}
-      onActivate={(plugin) => {
-        if (plugin.hasPreferences) configure(plugin);
+      // A click only selects (Base UI also turns Enter into a synthetic
+      // click, so this stays inert); Enter moves into the settings form.
+      onActivate={(plugin) => setSelectedId(plugin.id)}
+      // Only a user's own move counts: Base UI re-highlights the first row
+      // on its own (reason "none") whenever the search box takes focus.
+      onHighlightChange={(plugin, reason) => {
+        if (plugin && reason !== "none") setSelectedId(plugin.id);
       }}
-      menu={menu}
+      // …and a click moves Base UI's highlight onto the clicked row, so
+      // arrow keys carry on from there.
+      highlightId={selected?.id}
+      onInputKeyDown={(e) => {
+        if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+        if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+        const field = document.querySelector<HTMLElement>(
+          "[data-plugin-settings] input, [data-plugin-settings] select, [data-plugin-settings] button",
+        );
+        if (!field) return;
+        e.preventDefault();
+        field.focus();
+      }}
+      detail={() => (
+        <InstalledDetailPane
+          plugin={selected}
+          busy={status.state === "busy"}
+          onUpdate={(plugin) => void update(plugin)}
+          onUninstall={(plugin) => void uninstall(plugin)}
+          onSettingsSaved={refresh}
+        />
+      )}
+      menu={() => menu(selected)}
       onExit={pop}
       footerLabel={footerLabel}
       loadingLabel="Loading…"
