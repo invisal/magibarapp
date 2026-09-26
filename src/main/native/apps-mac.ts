@@ -203,9 +203,11 @@ function iconCacheKey(icnsPath: string, mtimeMs: number): string {
 
 /**
  * Converts `icnsPath` to a `${ICON_SIZE}px` PNG data URL, via `sips` (out of
- * process) with an on-disk cache keyed on the source file's mtime.
+ * process) with an on-disk cache keyed on the source file's mtime. Exported
+ * for the plugin engine's `{ fileIcon }` icons (an extension naming an
+ * `.icns` directly).
  */
-async function icnsToDataUrl(icnsPath: string): Promise<string | undefined> {
+export async function icnsToDataUrl(icnsPath: string): Promise<string | undefined> {
   const mtimeMs = await stat(icnsPath).then((s) => s.mtimeMs, () => 0)
   const cacheFile = join(iconCacheDir(), `${iconCacheKey(icnsPath, mtimeMs)}.png`)
   touchedIconFiles.add(basename(cacheFile))

@@ -18,7 +18,6 @@ import type {
   PluginListTree,
 } from "@plugin-engine/host/protocol";
 import {
-  accessoriesBadge,
   actionPanelToMenuItems,
   actionShortcuts,
   defaultAction,
@@ -28,6 +27,7 @@ import {
 import { renderDetailMarkdown, renderDetailMetadata } from "./map-detail-tree";
 import { handleRowShortcut } from "./action-shortcuts";
 import { usePluginListEvents } from "./usePluginListEvents";
+import { PluginAccessories } from "./PluginAccessories";
 import { isMac } from "@renderer/lib/shortcut";
 
 export interface PluginListScreenProps {
@@ -85,7 +85,11 @@ export function PluginListScreen({
           icon={displayIcon(row.icon)}
           title={row.title}
           subtitle={row.subtitle}
-          badge={accessoriesBadge(row.accessories)}
+          badge={
+            row.accessories?.length ? (
+              <PluginAccessories accessories={row.accessories} />
+            ) : undefined
+          }
         />
       )}
       onActivate={(row) => {

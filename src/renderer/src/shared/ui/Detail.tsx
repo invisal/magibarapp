@@ -346,7 +346,10 @@ function TagList({
             className="truncate rounded-full px-1.5 py-0.5 text-[11px]"
             style={
               item.color
-                ? { backgroundColor: `${item.color}26`, color: item.color }
+                ? {
+                    backgroundColor: `color-mix(in srgb, ${item.color} 15%, transparent)`,
+                    color: item.color,
+                  }
                 : { backgroundColor: "var(--color-input)" }
             }
           >

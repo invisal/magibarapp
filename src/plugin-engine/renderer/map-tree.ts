@@ -5,7 +5,6 @@
  * that this is just plumbing.
  */
 import type {
-  PluginAccessory,
   PluginActionNode,
   PluginActionPanelNode,
   PluginListItemNode,
@@ -30,19 +29,6 @@ export function flattenTree(
     }
   }
   return rows;
-}
-
-/** A trailing badge summarizing `accessories` — just the text/tag values;
- *  `ListScreen.Item`'s `badge` slot is a single trailing node, not a row of
- *  chips, so multiple accessories join with a middle dot. */
-export function accessoriesBadge(
-  accessories: PluginAccessory[] | undefined,
-): string | undefined {
-  if (!accessories || accessories.length === 0) return undefined;
-  const parts = accessories
-    .map((a) => a.tag?.value ?? a.text)
-    .filter((part): part is string => Boolean(part));
-  return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 const KIND_ICON: Record<NonNullable<PluginActionNode["kind"]>, string> = {

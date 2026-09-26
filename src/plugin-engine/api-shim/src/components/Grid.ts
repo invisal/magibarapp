@@ -20,12 +20,11 @@ export interface GridItemProps {
   title?: string;
   subtitle?: string;
   keywords?: string[];
-  /** An icon name, or a `data:`/`file:`/`https:` image URL, or `{ color }` —
-   *  real Raycast's `content` accepts an `Image.ImageLike`; v1 passes
-   *  through whatever string/color the plugin gave and lets the renderer's
-   *  existing icon resolution (`iconSrc()`) sort it out, same as every
-   *  other icon prop in this shim. */
-  content: string;
+  /** Any `Image.ImageLike` (an icon name, an image URL or asset, a
+   *  `{ source, tintColor }`, …), `{ color }` for a swatch, or either
+   *  wrapped as `{ value, tooltip }` — normalized by `reconciler.ts`'s
+   *  `icon()`, like every other icon prop. */
+  content: unknown;
   actions?: ReactNode;
 }
 

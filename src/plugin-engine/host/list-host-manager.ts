@@ -14,8 +14,11 @@
  * Not unit-testable (`utilityProcess` only exists inside real Electron) —
  * see `list-host-process.ts`'s doc comment.
  */
-import { utilityProcess, type UtilityProcess } from "electron";
+import { app, utilityProcess, type UtilityProcess } from "electron";
+import { resolveFileIcons } from "./file-icons.ts";
+import { icnsToDataUrl, resolveIcon } from "@main/native/apps-mac";
 import { hostEnv } from "./host-env.ts";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
   ListHostChildMessage,
@@ -43,6 +46,24 @@ interface Instance {
   ownerId: number;
   process: UtilityProcess;
   handlers: ListHostHandlers;
+  /** Renders resolve their file icons asynchronously; this keeps them in
+   *  the order the command produced them. */
+  renderChain: Promise<void>;
+}
+
+/** An app bundle's / file's icon as a `data:` URI. On macOS,
+ *  `app.getFileIcon` only returns generic icons for apps and `.icns`
+ *  files, so those go through the launcher's own app-icon pipeline. */
+async function loadFileIcon(path: string): Promise<string | null> {
+  // Extensions hard-code system icon paths that later macOS versions drop.
+  if (!existsSync(path)) return null;
+  if (process.platform === "darwin") {
+    const lower = path.toLowerCase().replace(/\/+$/, "");
+    if (lower.endsWith(".app")) return (await resolveIcon(path)) ?? null;
+    if (lower.endsWith(".icns")) return (await icnsToDataUrl(path)) ?? null;
+  }
+  const image = await app.getFileIcon(path, { size: "normal" });
+  return image.isEmpty() ? null : image.toDataURL();
 }
 
 class ListHostManager {
@@ -84,6 +105,7 @@ class ListHostManager {
       ownerId,
       process: child,
       handlers,
+      renderChain: Promise.resolve(),
     });
 
     child.on("message", (message: ListHostChildMessage) => {
@@ -160,18 +182,22 @@ class ListHostManager {
 
     switch (message.type) {
       case "render":
-        instance.handlers.onMessage({
-          type: "render",
-          instanceId,
-          tree: message.tree,
+        this.inOrder(instance, async () => {
+          const tree = await resolveFileIcons(message.tree, loadFileIcon);
+          if (!this.instances.has(instanceId)) return;
+          instance.handlers.onMessage({ type: "render", instanceId, tree });
         });
         return;
       case "error":
-        instance.handlers.onMessage({
-          type: "error",
-          instanceId,
-          message: message.message,
-        });
+        // After any render still resolving icons — that render arriving
+        // later would clear the error on screen.
+        this.inOrder(instance, () =>
+          instance.handlers.onMessage({
+            type: "error",
+            instanceId,
+            message: message.message,
+          }),
+        );
         return;
       case "effect": {
         const { effect } = message;
@@ -224,6 +250,13 @@ class ListHostManager {
         instance.handlers.onMessage({ type: "clear-search-bar", instanceId });
         return;
     }
+  }
+
+  /** Runs `step` after the instance's earlier renders/errors. */
+  private inOrder(instance: Instance, step: () => void | Promise<void>): void {
+    instance.renderChain = instance.renderChain.then(step).catch((error) => {
+      console.error("[plugin-engine] relaying a render failed:", error);
+    });
   }
 
   private post(instanceId: string, message: ListHostParentMessage): void {

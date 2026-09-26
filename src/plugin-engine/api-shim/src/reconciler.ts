@@ -327,35 +327,97 @@ function text(value: unknown): string | undefined {
   return undefined;
 }
 
+/** A path main must turn into an image (`app.getFileIcon`) — see
+ *  `host/file-icons.ts`, which rewrites these before a tree reaches the
+ *  renderer. */
+export const FILE_ICON_PREFIX = "fileicon:";
+
 /**
  * `Image.ImageLike` -> the plain string the renderer's `iconSrc()` resolves:
  * an `Icon.X` name, an asset file name, a URL, or an emoji. Real Raycast
  * also accepts `{ source, tintColor, mask }`, `{ source: { light, dark } }`,
- * `{ fileIcon: path }` and `{ value, tooltip }` — tint/mask have no renderer
- * support yet, so only the source survives.
+ * `{ fileIcon: path }`, `{ color }` (Grid) and `{ value, tooltip }`. A tint
+ * applies to glyph icons (drawn as a colored SVG); image sources and `mask`
+ * are shown as-is.
  */
 function icon(value: unknown): string | undefined {
   if (typeof value === "string") {
     if (isRaycastIconName(value)) return iconGlyph(value);
-    return assetIcon(value) ?? (normalizeSvgDataUri(value) || undefined);
+    const asset = assetIcon(value);
+    if (asset) return asset;
+    // An app bundle, `.icns`, or any other file: its Finder icon.
+    if (isAbsolute(value)) return FILE_ICON_PREFIX + value;
+    return normalizeSvgDataUri(value) || undefined;
   }
   if (!value || typeof value !== "object") return undefined;
   const v = value as Record<string, unknown>;
   if ("source" in v) {
     const source = v.source;
-    if (source && typeof source === "object") return themedIcon(source);
-    return icon(source);
+    const resolved =
+      source && typeof source === "object" ? themedIcon(source) : icon(source);
+    const tint = color(v.tintColor);
+    return resolved && tint && isTintableGlyph(resolved)
+      ? glyphSvg(resolved, tint)
+      : resolved;
   }
-  if ("fileIcon" in v) return icon(v.fileIcon);
+  if ("fileIcon" in v) {
+    return typeof v.fileIcon === "string"
+      ? FILE_ICON_PREFIX + v.fileIcon
+      : undefined;
+  }
+  if ("color" in v) {
+    const swatch = color(v.color);
+    return swatch ? swatchSvg(swatch) : undefined;
+  }
   if ("value" in v) return icon(v.value);
   if ("light" in v || "dark" in v) return themedIcon(v);
   return undefined;
 }
 
+/** A monochrome glyph a tint can recolor (`●`, `⊗`) — not an image to
+ *  load (the renderer's `isGlyphIcon` test), and not a color emoji, which
+ *  ignores `fill`. */
+function isTintableGlyph(value: string): boolean {
+  return !/[a-zA-Z]/.test(value) && !/\p{Extended_Pictographic}/u.test(value);
+}
+
+function svgDataUri(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function escapeXml(value: string): string {
+  return value.replace(
+    /[<>&"]/g,
+    (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]!,
+  );
+}
+
+/** A tinted glyph — Raycast's `{ source: Icon.X, tintColor }`. */
+function glyphSvg(glyph: string, fill: string): string {
+  return svgDataUri(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text x="16" y="17" font-size="26" text-anchor="middle" dominant-baseline="central" fill="${escapeXml(fill)}" font-family="-apple-system, system-ui, sans-serif">${escapeXml(glyph)}</text></svg>`,
+  );
+}
+
+/** A solid color tile — Grid's `content: { color }`. */
+function swatchSvg(fill: string): string {
+  return svgDataUri(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="8" fill="${escapeXml(fill)}"/></svg>`,
+  );
+}
+
+function isDarkAppearance(): boolean {
+  try {
+    return getPluginContext().appearance === "dark";
+  } catch {
+    return false;
+  }
+}
+
 /** `{ light, dark }` — the variant for the current appearance. */
 function themedIcon(value: object): string | undefined {
   const { light, dark } = value as { light?: unknown; dark?: unknown };
-  const isDark = getPluginContext().appearance === "dark";
+  const isDark = isDarkAppearance();
   return icon(isDark ? (dark ?? light) : (light ?? dark));
 }
 
@@ -420,12 +482,52 @@ function assetIcon(value: string): string | undefined {
   return result ?? undefined;
 }
 
-/** A `Color`/`Color.Dynamic`/raw CSS color -> a plain string. */
+/** Raycast's named `Color`s (`Color.Red` is the string `"Red"` here, see
+ *  `index.ts`) as CSS colors, close to Raycast's own palette. */
+const RAYCAST_COLORS: Record<string, string> = {
+  Red: "#ff6363",
+  Orange: "#ff9f43",
+  Yellow: "#ffc531",
+  Green: "#59d499",
+  Blue: "#56c2ff",
+  Purple: "#cf71ff",
+  Magenta: "#ff63c3",
+  PrimaryText: "currentColor",
+  SecondaryText: "#8e8e93",
+};
+
+/**
+ * Markdown images that name a file — `![](wheel.png)` resolved against the
+ * extension's `assets/`, or an absolute path — inlined as `data:` URIs, as
+ * Raycast shows them. URLs are left alone.
+ */
+export function markdownWithAssets(
+  markdown: string | undefined,
+): string | undefined {
+  if (!markdown) return markdown;
+  const inline = (src: string): string => {
+    const [path, query] = src.split("?", 2);
+    const data = assetIcon(decodeURI(path));
+    return data ? (query ? `${data}?${query}` : data) : src;
+  };
+  return markdown
+    .replace(
+      /(!\[[^\]]*\]\()\s*<?([^\s)>]+)>?/g,
+      (_m, head: string, src: string) => head + inline(src),
+    )
+    .replace(
+      /(<img\b[^>]*\bsrc=")([^"]+)"/gi,
+      (_m, head: string, src: string) => `${head}${inline(src)}"`,
+    );
+}
+
+/** A `Color`/`Color.Dynamic`/raw CSS color -> a CSS color string. */
 function color(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return RAYCAST_COLORS[value] ?? value;
   if (value && typeof value === "object") {
-    const v = value as { light?: unknown; dark?: unknown };
-    return color(v.light ?? v.dark);
+    const { light, dark } = value as { light?: unknown; dark?: unknown };
+    const isDark = isDarkAppearance();
+    return color(isDark ? (dark ?? light) : (light ?? dark));
   }
   return undefined;
 }
@@ -601,7 +703,7 @@ function buildDetailTree(node: HostNode): PluginDetailTree {
     type: "detail",
     isLoading: Boolean(node.props.isLoading),
     navigationTitle: str(node.props.navigationTitle),
-    markdown: str(node.props.markdown),
+    markdown: markdownWithAssets(str(node.props.markdown)),
     metadata: metadataNode ? buildMetadataItems(metadataNode) : undefined,
     actionPanel: actionPanel
       ? buildActionPanel(actionPanel, "detail")
@@ -818,7 +920,7 @@ function buildItemNode(node: HostNode, fallbackId: string): PluginListItemNode {
 function buildDetailBody(node: HostNode): PluginDetailBody {
   const metadataNode = node.children.find((c) => c.type === "detail-metadata");
   return {
-    markdown: str(node.props.markdown),
+    markdown: markdownWithAssets(str(node.props.markdown)),
     isLoading: Boolean(node.props.isLoading),
     metadata: metadataNode ? buildMetadataItems(metadataNode) : undefined,
   };

@@ -6,18 +6,20 @@
  * engine, since it's the one place that proves unmodified `@raycast/api`-style
  * JSX (hooks, state, conditional rendering) actually produces a correct tree.
  */
-import { after, afterEach, beforeEach, describe, it } from "node:test";
+import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createElement, useEffect, useState } from "react";
 import {
   createPluginRoot,
   flushSync,
+  markdownWithAssets,
   normalizeSvgDataUri,
   type PluginRoot,
 } from "./reconciler.ts";
+import { Color, Icon } from "./index.ts";
 import {
   actionRegistry,
   configureHostTransport,
@@ -668,5 +670,102 @@ describe("normalizeSvgDataUri", () => {
     ]) {
       assert.equal(normalizeSvgDataUri(value), value);
     }
+  });
+});
+
+describe("icons, colors and asset images", () => {
+  const dir = mkdtempSync(join(tmpdir(), "magibar-icon-test-"));
+  const assets = join(dir, "assets");
+  before(() => {
+    mkdirSync(assets);
+    writeFileSync(join(assets, "wheel.png"), Buffer.from([0x89, 0x50]));
+    configurePluginContext({
+      pluginId: "fixture",
+      pluginTitle: "Fixture",
+      commandName: "cmd",
+      appearance: "dark",
+      storageFilePath: join(dir, "storage.json"),
+      cacheFilePath: join(dir, "cache.json"),
+      supportPath: join(dir, "support"),
+      assetsPath: assets,
+      preferenceValues: {},
+    });
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const svgOf = (uri: string | undefined): string =>
+    decodeURIComponent(uri!.slice(uri!.indexOf(",") + 1));
+
+  function renderItem(props: Record<string, unknown>) {
+    root = createPluginRoot();
+    root.render(
+      createElement(List, null, [
+        createElement(List.Item, { key: "a", title: "A", ...props }),
+      ]),
+    );
+    return transport.lastTree!.sections[0].items[0];
+  }
+
+  it("tints a glyph icon with a named or dynamic Color", () => {
+    const item = renderItem({
+      icon: { source: Icon.CircleFilled, tintColor: Color.Red },
+      accessories: [
+        {
+          icon: {
+            source: Icon.CircleFilled,
+            tintColor: { light: "#000", dark: "#fff" },
+          },
+        },
+      ],
+    });
+    assert.match(svgOf(item.icon), /fill="#ff6363"/);
+    assert.match(svgOf(item.accessories![0].icon), /fill="#fff"/);
+  });
+
+  it("marks { fileIcon } and non-image paths for main to resolve", () => {
+    assert.equal(
+      renderItem({ icon: { fileIcon: "/Applications/Safari.app" } }).icon,
+      "fileicon:/Applications/Safari.app",
+    );
+    assert.equal(
+      renderItem({ icon: "/System/Icons/Exec.icns" }).icon,
+      "fileicon:/System/Icons/Exec.icns",
+    );
+  });
+
+  it("draws a Grid item's { color } content as a swatch", () => {
+    root = createPluginRoot();
+    root.render(
+      createElement(Grid, null, [
+        createElement(Grid.Item, {
+          key: "a",
+          content: { value: { color: "#123456" }, tooltip: "Navy" },
+        }),
+      ]),
+    );
+    const tree = transport.lastViewTree as PluginGridTree;
+    assert.match(svgOf(tree.sections[0].items[0].content), /fill="#123456"/);
+  });
+
+  it("maps a tag's named Color to CSS", () => {
+    const item = renderItem({
+      accessories: [{ tag: { value: "v", color: Color.Green } }],
+    });
+    assert.equal(item.accessories![0].tag!.color, "#59d499");
+  });
+
+  it("inlines markdown images that name an asset, keeping URLs", () => {
+    const md = markdownWithAssets(
+      "![Wheel](wheel.png?raycast-width=100) ![Web](https://x.test/a.png)",
+    );
+    assert.match(
+      md!,
+      /!\[Wheel\]\(data:image\/png;base64,iVA=\?raycast-width=100\)/,
+    );
+    assert.match(md!, /!\[Web\]\(https:\/\/x\.test\/a\.png\)/);
+    assert.equal(
+      markdownWithAssets('<img src="missing.png">'),
+      '<img src="missing.png">',
+    );
   });
 });

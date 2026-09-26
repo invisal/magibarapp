@@ -366,10 +366,10 @@ export class PluginHostSource implements ActionSource {
       return { ok: true, ran: "gated" };
     }
 
-    // Raycast always offers a command's argument fields before it runs;
-    // here that's the argument form — unless arguments already came in
-    // (the launcher's inline chip, a `launchCommand`, or the form itself)
-    // and none of the required ones are blank.
+    // A required argument that's still blank opens the argument form
+    // (arguments come from the launcher's inline chip, a `launchCommand`,
+    // or the form itself). Optional ones never block: as in Raycast,
+    // Enter runs the command with them empty.
     const args = command.arguments ?? [];
     const provided = options.arguments ?? {};
     const missingArg = args.some(
@@ -377,8 +377,7 @@ export class PluginHostSource implements ActionSource {
         a.required &&
         (provided[a.name] === undefined || provided[a.name] === ""),
     );
-    const noneProvided = args.length > 0 && Object.keys(provided).length === 0;
-    if (missingArg || noneProvided) {
+    if (missingArg) {
       const fields: PluginArgumentField[] = args.map((a) => ({
         name: a.name,
         type: a.type,
