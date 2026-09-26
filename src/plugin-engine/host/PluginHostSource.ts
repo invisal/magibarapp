@@ -403,7 +403,14 @@ export class PluginHostSource implements ActionSource {
 
     const instanceId = randomUUID();
     this.pendingLaunches.set(instanceId, options);
-    nav("plugin-list", { instanceId, actionId, title: command.title });
+    nav("plugin-list", {
+      instanceId,
+      actionId,
+      title: command.title,
+      // The footer's command badge, as in Raycast.
+      icon:
+        this.iconFor(entry, command.icon) ?? this.iconFor(entry) ?? undefined,
+    });
     return { ok: true, ran: "view" };
   }
 

@@ -18,6 +18,7 @@ import type {
 import { initialFormValues } from "./map-form-tree";
 import { actionPanelToMenuItems, actionShortcuts } from "./map-tree";
 import { usePanelShortcuts } from "./action-shortcuts";
+import { CommandBadge, PrimaryActionButton } from "./PluginChrome";
 import { isMac } from "@renderer/lib/shortcut";
 
 function BackIcon() {
@@ -37,6 +38,8 @@ function BackIcon() {
 export interface PluginFormScreenProps {
   tree: PluginFormTree;
   title: string;
+  /** The command's icon, for the footer badge. */
+  commandIcon?: string;
   invokeAction: (actionId: string) => void;
   sendEvent: (event: PluginInboundEvent) => void;
   /** Back/Escape — see `PluginDetailScreen`'s `onBack`. */
@@ -134,6 +137,7 @@ function FormItem({
 export function PluginFormScreen({
   tree,
   title,
+  commandIcon,
   invokeAction,
   sendEvent,
   onBack,
@@ -219,15 +223,26 @@ export function PluginFormScreen({
       </form>
 
       <Footer>
-        {menuItems.length > 0 && (
-          <Footer.Right>
+        <Footer.Left>
+          <CommandBadge
+            icon={commandIcon}
+            title={tree.navigationTitle ?? title}
+          />
+        </Footer.Left>
+        <Footer.Right>
+          <PrimaryActionButton
+            action={primaryAction}
+            shortcut="CommandOrControl+Enter"
+            onInvoke={handleActionSelect}
+          />
+          {menuItems.length > 0 && (
             <Footer.Menu
               open={menuOpen}
               onOpenChange={setMenuOpen}
               items={menuItems}
             />
-          </Footer.Right>
-        )}
+          )}
+        </Footer.Right>
       </Footer>
     </div>
   );

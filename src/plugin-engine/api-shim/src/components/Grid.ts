@@ -71,6 +71,7 @@ function GridEmptyView(props: GridEmptyViewProps) {
 
 export interface GridProps {
   isLoading?: boolean;
+  navigationTitle?: string;
   searchBarPlaceholder?: string;
   searchBarAccessory?: ReactNode;
   columns?: number;
@@ -97,6 +98,7 @@ const ITEM_SIZE_COLUMNS: Record<string, number> = {
 };
 
 function GridRoot({
+  navigationTitle,
   itemSize,
   isLoading = false,
   searchBarPlaceholder,
@@ -139,6 +141,7 @@ function GridRoot({
       fit,
       inset,
       filterQuery: filterEnabled ? searchText : "",
+      navigationTitle,
       selectedItemId,
       onSelectionChange,
       pagination,

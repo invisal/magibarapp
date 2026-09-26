@@ -1,22 +1,28 @@
 /**
  * A standalone top-level `Detail` command — no search bar, no rows (compare
  * `List.Item.Detail`'s pane inside `PluginListScreen`, which shares
- * `map-detail-tree.ts`'s rendering helpers with this screen).
+ * `map-detail-tree.ts`'s markdown rendering with this screen).
  *
- * v1 layout simplification: markdown and metadata stack vertically (via
- * `shared/ui/Detail.tsx`'s existing `Preview`/`Info` primitives — the same
- * ones the master/detail pane already uses), rather than a side-by-side
- * markdown/metadata split the way real Raycast's `Detail` usually lays out.
- * Revisit if that reads wrong for a common case.
+ * Laid out as Raycast does: the markdown on the left, `metadata` (if any)
+ * as a panel on the right with each label above its value, and the footer
+ * carrying the command (bottom-left) and its primary action (bottom-right).
  */
 import { useState } from "react";
 import { useShortcut } from "@renderer/lib/use-shortcut";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
-import { Detail } from "@renderer/shared/ui/Detail";
 import { Footer } from "@renderer/shared/ui/Footer";
 import type { PluginDetailTree } from "@plugin-engine/host/protocol";
-import { renderDetailMarkdown, renderDetailMetadata } from "./map-detail-tree";
-import { actionPanelToMenuItems, actionShortcuts } from "./map-tree";
+import { renderDetailMarkdown } from "./map-detail-tree";
+import {
+  actionPanelToMenuItems,
+  actionShortcuts,
+  defaultAction,
+} from "./map-tree";
+import {
+  CommandBadge,
+  MetadataSidebar,
+  PrimaryActionButton,
+} from "./PluginChrome";
 import { usePanelShortcuts } from "./action-shortcuts";
 import { isMac } from "@renderer/lib/shortcut";
 
@@ -37,11 +43,13 @@ function BackIcon() {
 export function PluginDetailScreen({
   tree,
   title,
+  commandIcon,
   invokeAction,
   onBack,
 }: {
   tree: PluginDetailTree;
   title: string;
+  commandIcon?: string;
   invokeAction: (actionId: string) => void;
   /** Back/Escape — defaults to popping the launcher route; a pushed plugin
    *  view passes its own (pop the plugin's navigation stack). */
@@ -62,7 +70,7 @@ export function PluginDetailScreen({
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex items-center gap-1 border-b border-border px-2 p-1 [-webkit-app-region:drag]">
+      <div className="flex h-10 shrink-0 items-center gap-1 px-2 [-webkit-app-region:drag]">
         {canGoBack && (
           <button
             type="button"
@@ -73,34 +81,40 @@ export function PluginDetailScreen({
             <BackIcon />
           </button>
         )}
-        <span className="truncate px-1 text-sm font-medium">
-          {tree.navigationTitle ?? title}
-        </span>
       </div>
 
-      <div className="min-h-0 flex-1">
-        <Detail>
-          <Detail.Preview align="start">
-            {renderDetailMarkdown(tree.markdown, tree.isLoading)}
-          </Detail.Preview>
-          {tree.metadata && (
-            <Detail.Info title={null}>
-              {renderDetailMetadata(tree.metadata)}
-            </Detail.Info>
-          )}
-        </Detail>
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-y-auto px-4 pb-4">
+          {renderDetailMarkdown(tree.markdown, tree.isLoading)}
+        </div>
+        {tree.metadata && tree.metadata.length > 0 && (
+          <div className="w-[34%] shrink-0 overflow-y-auto border-l border-border px-4 pb-4">
+            <MetadataSidebar items={tree.metadata} />
+          </div>
+        )}
       </div>
 
       <Footer>
-        {menuItems.length > 0 && (
-          <Footer.Right>
+        <Footer.Left>
+          <CommandBadge
+            icon={commandIcon}
+            title={tree.navigationTitle ?? title}
+          />
+        </Footer.Left>
+        <Footer.Right>
+          <PrimaryActionButton
+            action={defaultAction(tree.actionPanel)}
+            shortcut="Enter"
+            onInvoke={invokeAction}
+          />
+          {menuItems.length > 0 && (
             <Footer.Menu
               open={menuOpen}
               onOpenChange={setMenuOpen}
               items={menuItems}
             />
-          </Footer.Right>
-        )}
+          )}
+        </Footer.Right>
       </Footer>
     </div>
   );

@@ -670,6 +670,7 @@ function buildGridTree(gridNode: HostNode): PluginGridTree {
     ...selectionAndPaging(gridNode),
     type: "grid",
     isLoading: Boolean(gridNode.props.isLoading),
+    navigationTitle: str(gridNode.props.navigationTitle),
     searchBarPlaceholder: str(gridNode.props.searchBarPlaceholder),
     searchBarAccessory,
     columns: gridNode.props.columns as number | undefined,
@@ -757,6 +758,7 @@ function buildListTree(listNode: HostNode): PluginListTree {
   return {
     type: "list",
     isLoading: Boolean(listNode.props.isLoading),
+    navigationTitle: str(listNode.props.navigationTitle),
     searchBarPlaceholder: str(listNode.props.searchBarPlaceholder),
     searchBarAccessory,
     sections,
@@ -930,23 +932,33 @@ function buildMetadataItems(node: HostNode): PluginDetailMetadataItem[] {
   return node.children
     .map((child): PluginDetailMetadataItem | null => {
       switch (child.type) {
-        case "detail-metadata-label":
+        case "detail-metadata-label": {
+          // `text: { value, color }`
+          const labelColor = color(
+            (child.props.text as { color?: unknown } | undefined)?.color,
+          );
           return {
             kind: "label",
             title: (str(child.props.title) ?? "") as string,
             text: text(child.props.text),
+            ...(labelColor && { color: labelColor }),
             icon: icon(child.props.icon),
           };
+        }
         case "detail-metadata-taglist":
           return {
             kind: "tag-list",
             title: (str(child.props.title) ?? "") as string,
             items: child.children
               .filter((c) => c.type === "detail-metadata-taglist-item")
-              .map((c) => ({
-                text: text(c.props.text) ?? "",
-                color: color(c.props.color),
-              })),
+              .map((c) => {
+                const tagIcon = icon(c.props.icon);
+                return {
+                  text: text(c.props.text) ?? "",
+                  color: color(c.props.color),
+                  ...(tagIcon && { icon: tagIcon }),
+                };
+              }),
           };
         case "detail-metadata-link":
           return {

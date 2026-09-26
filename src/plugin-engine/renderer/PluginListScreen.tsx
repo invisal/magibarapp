@@ -26,6 +26,7 @@ import {
 } from "./map-tree";
 import { renderDetailMarkdown, renderDetailMetadata } from "./map-detail-tree";
 import { handleRowShortcut } from "./action-shortcuts";
+import { CommandBadge, PrimaryActionButton } from "./PluginChrome";
 import { usePluginListEvents } from "./usePluginListEvents";
 import { PluginAccessories } from "./PluginAccessories";
 import { isMac } from "@renderer/lib/shortcut";
@@ -33,6 +34,8 @@ import { isMac } from "@renderer/lib/shortcut";
 export interface PluginListScreenProps {
   tree: PluginListTree | null;
   title: string;
+  /** The command's icon, for the footer badge. */
+  commandIcon?: string;
   query: string;
   onQueryChange: (value: string) => void;
   invokeAction: (actionId: string) => void;
@@ -44,6 +47,7 @@ export interface PluginListScreenProps {
 export function PluginListScreen({
   tree,
   title,
+  commandIcon,
   query,
   onQueryChange,
   invokeAction,
@@ -99,6 +103,19 @@ export function PluginListScreen({
       onInputKeyDown={(e, row) =>
         handleRowShortcut(e, row?.actionPanel, invokeAction)
       }
+      customFooter={
+        <CommandBadge
+          icon={commandIcon}
+          title={tree?.navigationTitle ?? title}
+        />
+      }
+      footerActions={(row) => (
+        <PrimaryActionButton
+          action={defaultAction(row?.actionPanel)}
+          shortcut="Enter"
+          onInvoke={invokeAction}
+        />
+      )}
       menu={(row) =>
         row
           ? actionPanelToMenuItems(

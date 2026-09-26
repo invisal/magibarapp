@@ -35,6 +35,8 @@ export interface PluginListRoutePayload {
   instanceId: string;
   actionId: string;
   title: string;
+  /** The command's icon (a `data:` URI), for the footer. */
+  icon?: string;
 }
 
 function isPluginListRoutePayload(
@@ -58,7 +60,12 @@ function pluginIdOf(actionId: string): string | undefined {
   return actionId.split(":")[1];
 }
 
-function PluginView({ instanceId, actionId, title }: PluginListRoutePayload) {
+function PluginView({
+  instanceId,
+  actionId,
+  title,
+  icon,
+}: PluginListRoutePayload) {
   const { pop, push } = useRouteStack();
   const [query, setQuery] = useState("");
 
@@ -109,6 +116,7 @@ function PluginView({ instanceId, actionId, title }: PluginListRoutePayload) {
             key={depth}
             tree={view.tree}
             title={title}
+            commandIcon={icon}
             invokeAction={view.invokeAction}
             onBack={onBack}
           />
@@ -120,6 +128,7 @@ function PluginView({ instanceId, actionId, title }: PluginListRoutePayload) {
             key={depth}
             tree={view.tree}
             title={title}
+            commandIcon={icon}
             query={query}
             onQueryChange={setQuery}
             invokeAction={view.invokeAction}
@@ -134,6 +143,7 @@ function PluginView({ instanceId, actionId, title }: PluginListRoutePayload) {
             key={depth}
             tree={view.tree}
             title={title}
+            commandIcon={icon}
             query={query}
             onQueryChange={setQuery}
             invokeAction={view.invokeAction}
@@ -148,6 +158,7 @@ function PluginView({ instanceId, actionId, title }: PluginListRoutePayload) {
             key={depth}
             tree={view.tree}
             title={title}
+            commandIcon={icon}
             invokeAction={view.invokeAction}
             sendEvent={view.sendEvent}
             onBack={onBack}

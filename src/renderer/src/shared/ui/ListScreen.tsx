@@ -329,6 +329,9 @@ interface ListScreenBaseProps<T> {
   customFooter?:
     | ReactNode
     | ((ctx: { inputRef: RefObject<HTMLInputElement | null> }) => ReactNode);
+  /** Buttons at the footer's right, before the ⌘K menu — e.g. the
+   *  highlighted row's primary action. Gets the same target as `menu`. */
+  footerActions?: (highlighted: T | null) => ReactNode;
   loadingLabel?: ReactNode;
   emptyLabel?: ReactNode;
   noMatchLabel?: ReactNode;
@@ -403,6 +406,7 @@ function ListScreenRoot<T>({
   onInputKeyDown: onExtraInputKeyDown,
   footerLabel,
   customFooter,
+  footerActions,
   loadingLabel = "Loading…",
   emptyLabel,
   noMatchLabel = "No matches.",
@@ -741,14 +745,17 @@ function ListScreenRoot<T>({
               {footer ?? <Footer.Label>{label}</Footer.Label>}
             </Footer.Left>
           )}
-          {menu && (
+          {(menu || footerActions) && (
             <Footer.Right>
-              <Footer.Menu
-                open={menuOpen}
-                onOpenChange={setMenuOpen}
-                items={menu(menuTarget)}
-                finalFocus={inputRef}
-              />
+              {footerActions?.(menuTarget)}
+              {menu && (
+                <Footer.Menu
+                  open={menuOpen}
+                  onOpenChange={setMenuOpen}
+                  items={menu(menuTarget)}
+                  finalFocus={inputRef}
+                />
+              )}
             </Footer.Right>
           )}
         </Footer>

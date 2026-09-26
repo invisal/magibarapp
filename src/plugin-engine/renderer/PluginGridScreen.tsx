@@ -16,6 +16,7 @@ import {
   defaultAction,
 } from "./map-tree";
 import { handleRowShortcut } from "./action-shortcuts";
+import { CommandBadge, PrimaryActionButton } from "./PluginChrome";
 import { usePluginListEvents } from "./usePluginListEvents";
 import { isMac } from "@renderer/lib/shortcut";
 import { flattenGridTree, type PluginGridRow } from "./map-grid-tree";
@@ -24,6 +25,8 @@ import { SearchBarDropdown } from "./PluginListScreen";
 export interface PluginGridScreenProps {
   tree: PluginGridTree;
   title: string;
+  /** The command's icon, for the footer badge. */
+  commandIcon?: string;
   query: string;
   onQueryChange: (value: string) => void;
   invokeAction: (actionId: string) => void;
@@ -35,6 +38,7 @@ export interface PluginGridScreenProps {
 export function PluginGridScreen({
   tree,
   title,
+  commandIcon,
   query,
   onQueryChange,
   invokeAction,
@@ -83,6 +87,19 @@ export function PluginGridScreen({
       onInputKeyDown={(e, row) =>
         handleRowShortcut(e, row?.actionPanel, invokeAction)
       }
+      customFooter={
+        <CommandBadge
+          icon={commandIcon}
+          title={tree.navigationTitle ?? title}
+        />
+      }
+      footerActions={(row) => (
+        <PrimaryActionButton
+          action={defaultAction(row?.actionPanel)}
+          shortcut="Enter"
+          onInvoke={invokeAction}
+        />
+      )}
       menu={(row) =>
         row
           ? actionPanelToMenuItems(

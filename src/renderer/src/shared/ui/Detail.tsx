@@ -275,7 +275,9 @@ markdownRenderer.use({
       const { src, maxWidth, maxHeight } = stripRaycastImageSize(href);
       const style =
         maxWidth || maxHeight
-          ? ` style="${maxWidth ? `max-width:${maxWidth}px;` : ""}${maxHeight ? `max-height:${maxHeight}px;` : ""}"`
+          ? // Still never wider than the pane — Raycast scales an image
+            // down to fit, whatever width it asked for.
+            ` style="${maxWidth ? `max-width:min(100%,${maxWidth}px);height:auto;` : ""}${maxHeight ? `max-height:${maxHeight}px;` : ""}"`
           : "";
       const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
       return `<img src="${escapeAttr(src)}" alt="${escapeAttr(text)}"${titleAttr}${style}>`;

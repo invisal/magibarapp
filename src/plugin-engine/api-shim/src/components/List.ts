@@ -168,6 +168,7 @@ function ListDropdown({
 
 export interface ListProps {
   isLoading?: boolean;
+  navigationTitle?: string;
   searchBarPlaceholder?: string;
   /** v1 only understands a `List.Dropdown` here — see
    *  `host/protocol.ts`'s `PluginDropdownNode` doc comment. */
@@ -185,6 +186,7 @@ export interface ListProps {
 }
 
 function ListRoot({
+  navigationTitle,
   isLoading = false,
   searchBarPlaceholder,
   searchBarAccessory,
@@ -225,6 +227,7 @@ function ListRoot({
       isLoading,
       searchBarPlaceholder,
       filterQuery: filterEnabled ? searchText : "",
+      navigationTitle,
       isShowingDetail,
       selectedItemId,
       onSelectionChange,

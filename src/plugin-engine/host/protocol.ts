@@ -47,12 +47,15 @@ export interface PluginDetailMetadataLabel {
   kind: "label";
   title: string;
   text?: string;
+  /** `text: { value, color }` */
+  color?: string;
   icon?: string;
 }
 
 export interface PluginDetailMetadataTagListItem {
   text: string;
   color?: string;
+  icon?: string;
 }
 
 export interface PluginDetailMetadataTagList {
@@ -152,6 +155,7 @@ export interface PluginListTree
   extends PluginViewTreeBase, PluginSelectionAndPaging {
   type: "list";
   isLoading: boolean;
+  navigationTitle?: string;
   searchBarPlaceholder?: string;
   searchBarAccessory?: PluginDropdownNode;
   sections: PluginListSection[];
@@ -194,6 +198,7 @@ export interface PluginGridTree
   extends PluginViewTreeBase, PluginSelectionAndPaging {
   type: "grid";
   isLoading: boolean;
+  navigationTitle?: string;
   searchBarPlaceholder?: string;
   searchBarAccessory?: PluginDropdownNode;
   columns?: number;
