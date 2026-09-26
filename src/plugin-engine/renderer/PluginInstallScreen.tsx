@@ -15,7 +15,7 @@
  *
  * Registered as a core route (`"plugin-install"`) in `router/Outlet.tsx`.
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ListScreen } from "@renderer/shared/ui/ListScreen";
 import { Detail } from "@renderer/shared/ui/Detail";
 import {
@@ -103,7 +103,12 @@ export function PluginInstallScreen(): ReactNode {
   // `ListScreen`'s highlight, which a plain click can momentarily clear
   // (same approach as Clipboard History).
   const [selected, setSelected] = useState<Row | null>(null);
-  const typedSource = sourceFromQuery(query);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  // Memoized: `rows` (and the selection effect keyed on it) must only
+  // change with the query — a fresh object every render re-selected the
+  // typed-source row forever ("Maximum update depth exceeded").
+  const typedSource = useMemo(() => sourceFromQuery(query), [query]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -159,7 +164,10 @@ export function PluginInstallScreen(): ReactNode {
     const current = selected
       ? (list.find((r) => r.id === selected.id) ?? null)
       : null;
-    if (current !== selected) setSelected(current ?? list[0] ?? null);
+    // Falls back to the first row — also when nothing was selected yet
+    // (Base UI's own auto-highlight is ignored, see `onHighlightChange`).
+    const next = current ?? list[0] ?? null;
+    if (next !== selected) setSelected(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
 
@@ -294,6 +302,9 @@ export function PluginInstallScreen(): ReactNode {
     return { label: "Install", onClick: () => void install(row) };
   }
 
+  const installActionRef = useRef(installAction);
+  installActionRef.current = installAction;
+
   function detailPane(row: Row | null): ReactNode {
     if (row?.kind === "source") {
       return (
@@ -419,8 +430,10 @@ export function PluginInstallScreen(): ReactNode {
         if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
         if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
         e.preventDefault();
-        const action = selected ? installAction(selected) : null;
-        action?.onClick?.();
+        // Through a ref: Base UI keeps the first `onKeyDown` it was given,
+        // so `selected` here would be the first render's (null).
+        const row = selectedRef.current;
+        if (row) installActionRef.current(row).onClick?.();
       }}
       detail={() => detailPane(selected)}
       menu={() => menu(selected)}
