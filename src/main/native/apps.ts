@@ -15,7 +15,7 @@ import { listLinuxApplications } from './apps-linux'
  * `run` handlers) is the caller's job — see src/main/sources/apps.
  */
 function runAppsWorker(): Promise<AppsWorkerResult> {
-  const workerPath = join(__dirname, 'apps-worker.js')
+  const workerPath = join(import.meta.dirname, 'apps-worker.js')
   const iconCacheDir = join(app.getPath('userData'), 'icon-cache')
 
   return new Promise((resolve, reject) => {

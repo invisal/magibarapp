@@ -217,7 +217,7 @@ function toMessage(error: unknown): string {
 /** Default `runCode`: spawn the worker, pipe the code in, parse its JSON out. */
 function spawnWorker(code: string, timeoutMs: number): Promise<UserCodeResult> {
   return new Promise((resolve) => {
-    const workerPath = join(__dirname, "widget-worker.js");
+    const workerPath = join(import.meta.dirname, "widget-worker.js");
     const child = spawn(process.execPath, [workerPath], {
       env: {
         ...process.env,

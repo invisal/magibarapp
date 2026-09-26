@@ -37,6 +37,7 @@ import { ClipboardHistoryExtension } from "@extensions/clipboard-history";
 import { ExtensionStorage } from "@core/storage";
 import { HotkeyBindingStore } from "@extensions/hotkey/main/store";
 import { AliasStore } from "@extensions/alias/main/store";
+import { PluginHostSource } from "@plugin-engine/host/PluginHostSource";
 
 // Point extensions at `<userData>/extensions/` before any is constructed below.
 configureExtensions(app.getPath("userData"));
@@ -157,6 +158,15 @@ export function updateCalculatorSettings(
 export const quicklinkSource = new QuicklinkSource();
 
 /**
+ * The plugin engine (`src/plugin-engine`) — every installed
+ * Raycast-extension-compatible plugin's commands, as one source covering all
+ * of them (not one entry per plugin; see `PluginHostSource`'s doc comment).
+ * Owns `<userData>/plugins/`, entirely separate from `configureExtensions`'s
+ * `<userData>/extensions/` root above.
+ */
+const pluginHostSource = new PluginHostSource(app.getPath("userData"));
+
+/**
  * The Drafts extension — the half-filled forms the user backed out of, listed
  * in the "Drafts" section at the head of the root list. It owns its
  * `ExtensionStorage` (`<userData>/extensions/draft.json`, keyed `drafts`) and
@@ -180,6 +190,7 @@ const sources: ActionSource[] = [
   quitProcess,
   xcodeClean,
   quicklinkSource,
+  pluginHostSource,
   new InstalledAppSource(),
   new ExchangeRateSource(),
   cryptoPriceSource,

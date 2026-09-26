@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   IPC_CHANNELS,
   type CalculatorSettings,
@@ -19,6 +19,10 @@ import { actionAliasesApi } from "@extensions/alias/ipc/preload";
 import { quicklinkApi } from "@extensions/quicklink/ipc/preload";
 import { widgetApi } from "@extensions/widget/ipc/preload";
 import { windowApi } from "@extensions/window/ipc/preload";
+import {
+  pluginEngineApi,
+  pluginListApi,
+} from "@plugin-engine/host/ipc-preload";
 
 const api = {
   platform: process.platform,
@@ -155,6 +159,18 @@ const api = {
 
   /** Per-action aliases (Ctrl+K menu's "Alias" row) ↔ main. */
   actionAliases: actionAliasesApi,
+
+  /** Install-plugin screen ↔ main (`src/plugin-engine`). */
+  pluginEngine: pluginEngineApi,
+
+  /** `PluginListScreen` ↔ its running command instance. */
+  pluginList: pluginListApi,
+
+  /** A picked `File`'s real filesystem path — Electron removed
+   *  `File.path` (regardless of sandbox settings), so `PluginFormScreen`'s
+   *  `Form.FilePicker` resolves it here instead, via `electron.webUtils`
+   *  (only reachable from the preload script under `contextIsolation`). */
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld("api", api);

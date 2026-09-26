@@ -53,7 +53,7 @@ export function openWidgetWindow(target: WidgetView): void {
     autoHideMenuBar: true,
     ...framelessChrome,
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -74,8 +74,11 @@ export function openWidgetWindow(target: WidgetView): void {
       `${process.env["ELECTRON_RENDERER_URL"]}/widget.html#${hash}`,
     );
   } else {
-    void widgetWindow.loadFile(join(__dirname, "../renderer/widget.html"), {
-      hash,
-    });
+    void widgetWindow.loadFile(
+      join(import.meta.dirname, "../renderer/widget.html"),
+      {
+        hash,
+      },
+    );
   }
 }

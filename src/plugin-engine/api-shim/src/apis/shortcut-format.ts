@@ -1,0 +1,83 @@
+/**
+ * Converts a real Raycast `Keyboard.Shortcut` (`{modifiers, key}`, using
+ * Raycast's own token vocabulary — `"opt"` not `"alt"`, `"arrowUp"` not
+ * `"up"`, …) into the accelerator string format this app's own
+ * `ShortcutLabel`/`matchesShortcut` understand (`@renderer/lib/shortcut`:
+ * lowercase tokens joined by `"+"`, e.g. `"cmd+shift+k"`).
+ *
+ * `reconciler.ts`'s `buildAction` is the only caller — an `Action`'s
+ * `shortcut` prop is passed straight through as plain host-node data (see
+ * `components/Action.ts`), converted to the wire format at commit time.
+ */
+
+export interface KeyboardShortcut {
+  modifiers?: string[];
+  key: string;
+}
+
+/** Raycast's cross-platform form: one shortcut per OS. */
+export interface PlatformShortcut {
+  macOS?: KeyboardShortcut;
+  Windows?: KeyboardShortcut;
+}
+
+export type ShortcutInput = string | KeyboardShortcut | PlatformShortcut;
+
+/** Raycast for Windows reads a macOS-only shortcut's `cmd` as Ctrl. */
+function modifierToken(modifier: string, platform: NodeJS.Platform): string {
+  switch (modifier) {
+    case "cmd":
+      return platform === "darwin" ? "cmd" : "ctrl";
+    case "opt":
+    case "alt":
+      return "alt";
+    case "windows":
+      return "super";
+    default:
+      return modifier;
+  }
+}
+
+const KEY_TOKENS: Record<string, string> = {
+  arrowUp: "up",
+  arrowDown: "down",
+  arrowLeft: "left",
+  arrowRight: "right",
+  return: "return",
+  enter: "enter",
+  // Raycast's "delete" is the ⌫ key; "deleteForward" is ⌦.
+  delete: "backspace",
+  deleteForward: "delete",
+  backspace: "backspace",
+  pageUp: "pageup",
+  pageDown: "pagedown",
+  home: "home",
+  end: "end",
+  escape: "escape",
+  tab: "tab",
+  space: "space",
+};
+
+function isKeyboardShortcut(value: unknown): value is KeyboardShortcut {
+  return !!value && typeof value === "object" && "key" in value;
+}
+
+/** `undefined` for anything that isn't a usable shortcut — a missing/absent
+ *  `shortcut` prop stays absent on the wire rather than becoming a stray
+ *  empty string. */
+export function toAccelerator(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !("key" in value)) {
+    const perPlatform = value as PlatformShortcut;
+    value = platform === "darwin" ? perPlatform.macOS : perPlatform.Windows;
+  }
+  if (!isKeyboardShortcut(value) || !value.key) return undefined;
+  const modifiers = (value.modifiers ?? []).map((modifier) =>
+    modifierToken(modifier, platform),
+  );
+  const key = KEY_TOKENS[value.key] ?? value.key;
+  return [...modifiers, key].join("+");
+}

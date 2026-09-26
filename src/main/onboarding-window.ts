@@ -35,7 +35,7 @@ export function openOnboardingWindow(): void {
     autoHideMenuBar: true,
     ...framelessChrome,
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -54,7 +54,7 @@ export function openOnboardingWindow(): void {
   if (process.env["ELECTRON_RENDERER_URL"]) {
     win.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}/onboarding.html`);
   } else {
-    win.loadFile(join(__dirname, "../renderer/onboarding.html"));
+    win.loadFile(join(import.meta.dirname, "../renderer/onboarding.html"));
   }
 }
 

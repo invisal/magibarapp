@@ -1,0 +1,167 @@
+/**
+ * `Grid` / `Grid.Item` / `Grid.Section` / `Grid.Dropdown` / `Grid.EmptyView`.
+ * Mirrors `List.ts` closely (same launcher-search-driven filtering via
+ * `searchFilter.ts`, same dropdown/empty-view shapes) — a `Grid` is a `List`
+ * with image-forward items and a tile layout instead of rows.
+ */
+import {
+  createElement,
+  useContext,
+  useEffect,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { searchTextStore, type Pagination } from "../host-bridge.ts";
+import { FrameContext } from "../navigation.ts";
+import { List } from "./List.ts";
+
+export interface GridItemProps {
+  id?: string;
+  title?: string;
+  subtitle?: string;
+  keywords?: string[];
+  /** Any `Image.ImageLike` (an icon name, an image URL or asset, a
+   *  `{ source, tintColor }`, …), `{ color }` for a swatch, or either
+   *  wrapped as `{ value, tooltip }` — normalized by `reconciler.ts`'s
+   *  `icon()`, like every other icon prop. */
+  content: unknown;
+  actions?: ReactNode;
+}
+
+function GridItem({
+  id,
+  title,
+  subtitle,
+  keywords,
+  content,
+  actions,
+}: GridItemProps) {
+  return createElement(
+    "grid-item",
+    { id, title, subtitle, keywords, content },
+    actions,
+  );
+}
+
+export interface GridSectionProps {
+  title?: string;
+  /** Accepted for signature compatibility, not enforced — v1 only honors
+   *  the top-level `Grid`'s layout values, matching this codebase's
+   *  "accept but don't enforce" treatment of other decorative options. */
+  columns?: number;
+  aspectRatio?: string;
+  fit?: string;
+  inset?: string;
+  children?: ReactNode;
+}
+
+function GridSection({ title, children }: GridSectionProps) {
+  return createElement("grid-section", { title }, children);
+}
+
+export interface GridEmptyViewProps {
+  title: string;
+  description?: string;
+  icon?: string;
+}
+
+function GridEmptyView(props: GridEmptyViewProps) {
+  return createElement("grid-empty-view", props);
+}
+
+export interface GridProps {
+  isLoading?: boolean;
+  navigationTitle?: string;
+  searchBarPlaceholder?: string;
+  searchBarAccessory?: ReactNode;
+  columns?: number;
+  /** Deprecated in real Raycast in favor of `columns`, still widely used. */
+  itemSize?: "small" | "medium" | "large";
+  aspectRatio?: "1" | "3/2" | "2/3" | "4/3" | "3/4" | "16/9" | "9/16";
+  fit?: "contain" | "fill";
+  inset?: "none" | "small" | "medium" | "large";
+  onSearchTextChange?: (text: string) => void;
+  filtering?: boolean | { keepSectionOrder?: boolean };
+  selectedItemId?: string;
+  onSelectionChange?: (id: string | null) => void;
+  pagination?: Pagination;
+  /** Debounce `onSearchTextChange` — applied by the renderer. */
+  throttle?: boolean;
+  children?: ReactNode;
+}
+
+/** The deprecated `itemSize` prop, as a column count. */
+const ITEM_SIZE_COLUMNS: Record<string, number> = {
+  small: 8,
+  medium: 5,
+  large: 3,
+};
+
+function GridRoot({
+  navigationTitle,
+  itemSize,
+  isLoading = false,
+  searchBarPlaceholder,
+  searchBarAccessory,
+  columns,
+  aspectRatio,
+  fit,
+  inset,
+  onSearchTextChange,
+  filtering,
+  selectedItemId,
+  onSelectionChange,
+  pagination,
+  throttle,
+  children,
+}: GridProps) {
+  const frameId = useContext(FrameContext);
+  const searchText = useSyncExternalStore(searchTextStore.subscribe, () =>
+    searchTextStore.getText(frameId),
+  );
+
+  useEffect(() => {
+    onSearchTextChange?.(searchText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchText]);
+
+  // Real Raycast: filtering defaults to off when the extension handles
+  // search itself via `onSearchTextChange`, on otherwise. Applied to the
+  // committed host tree by `reconciler.ts` (see `searchFilter.ts`).
+  const filterEnabled =
+    filtering === undefined ? !onSearchTextChange : filtering !== false;
+
+  return createElement(
+    "grid",
+    {
+      isLoading,
+      searchBarPlaceholder,
+      columns: columns ?? (itemSize ? ITEM_SIZE_COLUMNS[itemSize] : undefined),
+      aspectRatio,
+      fit,
+      inset,
+      filterQuery: filterEnabled ? searchText : "",
+      navigationTitle,
+      selectedItemId,
+      onSelectionChange,
+      pagination,
+      throttle,
+    },
+    searchBarAccessory,
+    children,
+  );
+}
+
+export const Grid = Object.assign(GridRoot, {
+  Item: GridItem,
+  Section: GridSection,
+  EmptyView: GridEmptyView,
+  // Identical shape to `List.Dropdown` (real Raycast shares the type too) —
+  // re-exported rather than reimplemented, so `reconciler.ts`'s existing
+  // `buildDropdown` needs no Grid-specific counterpart.
+  Dropdown: List.Dropdown,
+  // Enum namespaces extensions read at render time (`Grid.Inset.Small`).
+  Inset: { Zero: "zero", Small: "small", Medium: "medium", Large: "large" },
+  ItemSize: { Small: "small", Medium: "medium", Large: "large" },
+  Fit: { Contain: "contain", Fill: "fill" },
+});

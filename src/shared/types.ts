@@ -4,7 +4,9 @@ export type LauncherActionType =
   | "quicklink"
   | "widget"
   /** A pinned calculation (Calculator History) — a live value, like a Widget row. */
-  | "calculation";
+  | "calculation"
+  /** A command contributed by an installed plugin (see `src/plugin-engine`). */
+  | "plugin";
 
 /**
  * The section a launcher row is listed under. Both the empty-query root list

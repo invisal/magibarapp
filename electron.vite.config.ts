@@ -16,6 +16,7 @@ const nodeAlias = {
   "@main": resolve(__dirname, "src/main"),
   "@shared": resolve(__dirname, "src/shared"),
   "@extensions": resolve(__dirname, "src/extensions"),
+  "@plugin-engine": resolve(__dirname, "src/plugin-engine"),
 };
 
 /**
@@ -112,6 +113,27 @@ export default defineConfig({
             __dirname,
             "src/extensions/widget/main/worker.ts",
           ),
+          // One-shot worker for a plugin's no-view command, spawned the same
+          // way as the two entries above; src/plugin-engine/host/
+          // no-view-runner.ts resolves it as `plugin-noview-worker.js`.
+          "plugin-noview-worker": resolve(
+            __dirname,
+            "src/plugin-engine/host/no-view-worker.ts",
+          ),
+          // Persistent `utilityProcess` hosting one running view command
+          // instance; src/plugin-engine/host/list-host-manager.ts forks it
+          // as `plugin-list-host.js`. Unlike the one-shot workers above,
+          // this stays alive for the life of the open plugin screen.
+          //
+          // Both plugin entries compile in the @raycast/api shim plus React
+          // and react-reconciler (devDependencies, so bundled rather than
+          // externalized) — host/runtime.ts hands those to every installed
+          // extension's prebuilt bundle, so nothing reads node_modules or
+          // raw shim source at runtime.
+          "plugin-list-host": resolve(
+            __dirname,
+            "src/plugin-engine/host/list-host-process.ts",
+          ),
         },
       },
     },
@@ -127,6 +149,7 @@ export default defineConfig({
         "@renderer": resolve(__dirname, "src/renderer/src"),
         "@shared": nodeAlias["@shared"],
         "@extensions": nodeAlias["@extensions"],
+        "@plugin-engine": nodeAlias["@plugin-engine"],
       },
     },
     // The per-window HTML entries live in `src/renderer/` but pull their React
