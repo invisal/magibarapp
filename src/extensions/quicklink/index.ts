@@ -151,7 +151,7 @@ export class QuicklinkSource extends Extension {
         action: {
           id: IMPORT_ACTION_ID,
           title: "Import Quicklinks",
-          subtitle: "Add quicklinks from a Raycast JSON file",
+          subtitle: "Add quicklinks from a JSON file",
           icon: "📥",
           type: "command",
         },
@@ -161,7 +161,7 @@ export class QuicklinkSource extends Extension {
         action: {
           id: EXPORT_ACTION_ID,
           title: "Export Quicklinks",
-          subtitle: "Save your quicklinks as a Raycast JSON file",
+          subtitle: "Save your quicklinks as a JSON file",
           icon: "📤",
           type: "command",
         },

@@ -191,7 +191,7 @@ export async function fetchStoreDetail(
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) {
-    throw new Error(`the Raycast Store returned an error (${res.status})`);
+    throw new Error(`the extension store returned an error (${res.status})`);
   }
   const body = (await res.json()) as {
     metadata?: unknown;
@@ -236,11 +236,11 @@ async function fetchListings(
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) {
-    throw new Error(`the Raycast Store returned an error (${res.status})`);
+    throw new Error(`the extension store returned an error (${res.status})`);
   }
   const body = (await res.json()) as { data?: unknown };
   if (!Array.isArray(body.data)) {
-    throw new Error("the Raycast Store returned an unexpected response");
+    throw new Error("the extension store returned an unexpected response");
   }
   return (body.data as StoreListing[]).filter(
     (listing) =>
@@ -331,13 +331,13 @@ export async function resolveStoreExtension(
       ok: false,
       error:
         lastError ??
-        `couldn't find "${ref.name}"${ref.author ? ` by ${ref.author}` : ""} in the Raycast Store`,
+        `couldn't find "${ref.name}"${ref.author ? ` by ${ref.author}` : ""} in the extension store`,
     };
   }
   if (!listing.download_url) {
     return {
       ok: false,
-      error: `the Raycast Store listing for "${ref.name}" has no download`,
+      error: `the store listing for "${ref.name}" has no download`,
     };
   }
   return {

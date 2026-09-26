@@ -358,7 +358,7 @@ function unsupportedBuiltIn(name: string, defaultTitle: string) {
         getHostTransport().sendEffect({
           op: "toast",
           title: "Not supported",
-          message: `${name} needs a Raycast built-in command Magibar doesn't have.`,
+          message: `${name} needs a built-in command Magibar doesn't have.`,
           style: "failure",
         }),
     });

@@ -139,7 +139,7 @@ export async function installDependencies(
     return {
       ok: false,
       error:
-        "Node.js/npm is required to build extensions from source, and it couldn't be found. Install Node.js from nodejs.org (or install from the Raycast Store instead, which needs no build).",
+        "Node.js/npm is required to build extensions from source, and it couldn't be found. Install Node.js from nodejs.org (or install it from the Store instead, which needs no build).",
     };
   }
 
