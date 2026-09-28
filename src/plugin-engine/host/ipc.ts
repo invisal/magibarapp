@@ -10,7 +10,9 @@ import {
   fetchHitIcons,
   fetchStoreDetail,
   isPlatformSupported,
+  listStore,
   searchStore,
+  type StoreSearchHit,
 } from "../install/store.ts";
 import { encodeAsIs, type IconEncoder } from "../install/icon.ts";
 import { pluginDir, pluginIdFromName } from "../paths.ts";
@@ -30,6 +32,7 @@ import {
   type PluginPreferencesPayload,
   type SearchStoreResponse,
   type StoreDetailResponse,
+  type StoreExtensionSearchResult,
 } from "./protocol.ts";
 import { reinstallSource } from "../registry.ts";
 import {
@@ -81,6 +84,38 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Shared by `searchStore` and `listStoreExtensions` — a Store hit plus its
+ *  resolved icon and install state, in the shape the renderer expects. */
+function toSearchResults(
+  hits: StoreSearchHit[],
+  icons: (string | null)[],
+  installed: Set<string>,
+): StoreExtensionSearchResult[] {
+  return hits.map((hit, i) => ({
+    name: hit.name,
+    author: hit.author,
+    authorName: hit.authorName,
+    title: hit.title,
+    description: hit.description,
+    iconDataUri: icons[i],
+    platforms: hit.platforms,
+    downloadCount: hit.downloadCount,
+    commandCount: hit.commandCount,
+    commands: hit.commands.map((command) => ({
+      name: command.name,
+      title: command.title,
+      description: command.description,
+      supported: command.mode === "view" || command.mode === "no-view",
+    })),
+    categories: hit.categories,
+    authorAvatarUrl: hit.authorAvatarUrl,
+    createdAt: hit.createdAt,
+    updatedAt: hit.updatedAt,
+    supported: isPlatformSupported(hit.platforms),
+    installed: installed.has(pluginIdFromName(hit.name)),
+  }));
+}
+
 export function registerPluginEngineIpc(
   ipc: IpcMain,
   source: PluginHostSource,
@@ -130,32 +165,21 @@ export function registerPluginEngineIpc(
         const hits = await searchStore(query);
         const icons = await fetchHitIcons(hits, { encode: downscaleIcon });
         const installed = new Set(source.registry.list().map((e) => e.id));
-        return {
-          ok: true,
-          results: hits.map((hit, i) => ({
-            name: hit.name,
-            author: hit.author,
-            authorName: hit.authorName,
-            title: hit.title,
-            description: hit.description,
-            iconDataUri: icons[i],
-            platforms: hit.platforms,
-            downloadCount: hit.downloadCount,
-            commandCount: hit.commandCount,
-            commands: hit.commands.map((command) => ({
-              name: command.name,
-              title: command.title,
-              description: command.description,
-              supported: command.mode === "view" || command.mode === "no-view",
-            })),
-            categories: hit.categories,
-            authorAvatarUrl: hit.authorAvatarUrl,
-            createdAt: hit.createdAt,
-            updatedAt: hit.updatedAt,
-            supported: isPlatformSupported(hit.platforms),
-            installed: installed.has(pluginIdFromName(hit.name)),
-          })),
-        };
+        return { ok: true, results: toSearchResults(hits, icons, installed) };
+      } catch (error) {
+        return { ok: false, error: errorMessage(error) };
+      }
+    },
+  );
+
+  ipc.handle(
+    PLUGIN_ENGINE_CHANNELS.listStoreExtensions,
+    async (): Promise<SearchStoreResponse> => {
+      try {
+        const hits = await listStore({ perPage: 20 });
+        const icons = await fetchHitIcons(hits, { encode: downscaleIcon });
+        const installed = new Set(source.registry.list().map((e) => e.id));
+        return { ok: true, results: toSearchResults(hits, icons, installed) };
       } catch (error) {
         return { ok: false, error: errorMessage(error) };
       }

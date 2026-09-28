@@ -91,7 +91,7 @@ export function InstallButton({ action }: { action: InstallAction }) {
         "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-opacity [-webkit-app-region:no-drag]",
         action.secondary
           ? "bg-input text-foreground hover:bg-item-selected"
-          : "bg-foreground text-background hover:opacity-90",
+          : "bg-accent text-white hover:opacity-90",
         action.disabled && "cursor-default opacity-50 hover:opacity-50",
       )}
     >

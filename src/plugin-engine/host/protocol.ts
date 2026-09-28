@@ -427,6 +427,9 @@ export const PLUGIN_ENGINE_CHANNELS = {
   listMessage: "plugin-list:message",
   /** Renderer -> main: search the Raycast Store — see `install/store.ts`. */
   searchStore: "plugin-engine:search-store",
+  /** Renderer -> main: the Store's default listing, shown before any search
+   *  query is typed — see `install/store.ts`. */
+  listStoreExtensions: "plugin-engine:list-store-extensions",
   /** Main -> renderer: install progress, one message per stage change. */
   installProgress: "plugin-engine:install-progress",
   /** Renderer -> main: every installed plugin, for "Manage Extensions". */

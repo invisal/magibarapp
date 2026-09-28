@@ -29,6 +29,12 @@ import { encodeAsIs, fetchIconDataUri, type IconEncoder } from "./icon.ts";
 
 export const STORE_SEARCH_URL =
   "https://www.raycast.com/frontend_api/extensions/search";
+/** The Store's default/browse listing — same shape as search, no `q`. Used
+ *  to show an initial catalog before the user types anything. Unlike
+ *  `/search`, it ignores `per_page`/`limit`-style params and always returns
+ *  a fixed page of 10, paginated via `page` instead — see `listStore`. */
+export const STORE_LIST_URL = "https://www.raycast.com/frontend_api/extensions";
+const STORE_LIST_PAGE_SIZE = 10;
 
 const SEARCH_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
@@ -222,15 +228,10 @@ export async function fetchStoreDetail(
   return detail;
 }
 
-async function fetchListings(
-  query: string,
-  perPage: number,
+async function fetchStoreJson(
+  url: string,
   fetchImpl: FetchLike,
 ): Promise<StoreListing[]> {
-  const url = `${STORE_SEARCH_URL}?${new URLSearchParams({
-    q: query,
-    per_page: String(perPage),
-  })}`;
   const res = await fetchImpl(url, {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
@@ -249,6 +250,18 @@ async function fetchListings(
       listing.status !== "removed" &&
       !listing.kill_listed_at,
   );
+}
+
+async function fetchListings(
+  query: string,
+  perPage: number,
+  fetchImpl: FetchLike,
+): Promise<StoreListing[]> {
+  const url = `${STORE_SEARCH_URL}?${new URLSearchParams({
+    q: query,
+    per_page: String(perPage),
+  })}`;
+  return fetchStoreJson(url, fetchImpl);
 }
 
 const searchCache = new Map<string, { at: number; hits: StoreSearchHit[] }>();
@@ -271,6 +284,36 @@ export async function searchStore(
   );
   const hits = listings.map(mapListing);
   searchCache.set(cacheKey, { at: Date.now(), hits });
+  return hits;
+}
+
+const listCache = new Map<string, { at: number; hits: StoreSearchHit[] }>();
+
+/** The Store's default listing (no search query) — shown as an initial
+ *  catalog before the user has typed anything. Cached like `searchStore`.
+ *  The endpoint's page size is fixed at `STORE_LIST_PAGE_SIZE`, so reaching
+ *  `perPage` means fetching that many pages and concatenating them. */
+export async function listStore(
+  opts: { fetch?: FetchLike; perPage?: number } = {},
+): Promise<StoreSearchHit[]> {
+  const perPage = opts.perPage ?? 20;
+  const cacheKey = String(perPage);
+  const cached = listCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < SEARCH_CACHE_TTL_MS)
+    return cached.hits;
+
+  const fetchImpl = opts.fetch ?? fetch;
+  const pageCount = Math.ceil(perPage / STORE_LIST_PAGE_SIZE);
+  const pages = await Promise.all(
+    Array.from({ length: pageCount }, (_, i) => {
+      const url = `${STORE_LIST_URL}?${new URLSearchParams({
+        page: String(i + 1),
+      })}`;
+      return fetchStoreJson(url, fetchImpl);
+    }),
+  );
+  const hits = pages.flat().slice(0, perPage).map(mapListing);
+  listCache.set(cacheKey, { at: Date.now(), hits });
   return hits;
 }
 

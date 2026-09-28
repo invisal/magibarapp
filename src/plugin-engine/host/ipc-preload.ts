@@ -50,6 +50,9 @@ export const pluginEngineApi = {
   },
   searchStore: (query: string): Promise<SearchStoreResponse> =>
     ipcRenderer.invoke(PLUGIN_ENGINE_CHANNELS.searchStore, query),
+  /** The Store's default listing, shown before any search query is typed. */
+  listStoreExtensions: (): Promise<SearchStoreResponse> =>
+    ipcRenderer.invoke(PLUGIN_ENGINE_CHANNELS.listStoreExtensions),
   listInstalled: (): Promise<InstalledPluginSummary[]> =>
     ipcRenderer.invoke(PLUGIN_ENGINE_CHANNELS.listInstalled),
   getPreferences: (
