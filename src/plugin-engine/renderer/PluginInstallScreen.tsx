@@ -98,6 +98,12 @@ export function PluginInstallScreen(): ReactNode {
     [],
   );
   const [searchError, setSearchError] = useState<string | null>(null);
+  // The Store's default listing, shown until the user types a query —
+  // loaded once on mount, `null` while it's in flight.
+  const [catalog, setCatalog] = useState<StoreExtensionSearchResult[] | null>(
+    null,
+  );
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>({ state: "idle" });
   // The row shown in the pane — tracked here rather than read from
   // `ListScreen`'s highlight, which a plain click can momentarily clear
@@ -109,6 +115,21 @@ export function PluginInstallScreen(): ReactNode {
   // change with the query — a fresh object every render re-selected the
   // typed-source row forever ("Maximum update depth exceeded").
   const typedSource = useMemo(() => sourceFromQuery(query), [query]);
+
+  useEffect(() => {
+    let live = true;
+    void window.api.pluginEngine.listStoreExtensions().then((response) => {
+      if (!live) return;
+      if (response.ok) setCatalog(response.results);
+      else {
+        setCatalog([]);
+        setCatalogError(response.error);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -149,13 +170,16 @@ export function PluginInstallScreen(): ReactNode {
         { kind: "source", id: "typed-source", source: typedSource, label },
       ];
     }
-    if (results === null) return null;
-    return results.map((result) => ({
+    // An empty query browses the Store's default catalog instead of search
+    // results — both are `null` while their own fetch is in flight.
+    const list = query.trim() ? results : catalog;
+    if (list === null) return null;
+    return list.map((result) => ({
       kind: "store",
       id: `${result.author}/${result.name}`,
       result,
     }));
-  }, [typedSource, results]);
+  }, [typedSource, query, results, catalog]);
 
   // Keep `selected` pointing at a row that exists, and at its current
   // object (an install flips `installed`).
@@ -220,14 +244,16 @@ export function PluginInstallScreen(): ReactNode {
       }
       setStatus({ state: "installed", rowId: row.id, title: result.title });
       if (row.kind === "store") {
-        setResults(
-          (current) =>
-            current?.map((r) =>
-              r.name === row.result.name && r.author === row.result.author
-                ? { ...r, installed: true }
-                : r,
-            ) ?? current,
-        );
+        const markInstalled = (
+          current: StoreExtensionSearchResult[] | null,
+        ): StoreExtensionSearchResult[] | null =>
+          current?.map((r) =>
+            r.name === row.result.name && r.author === row.result.author
+              ? { ...r, installed: true }
+              : r,
+          ) ?? current;
+        setResults(markInstalled);
+        setCatalog(markInstalled);
       }
     } finally {
       unsubscribe();
@@ -369,6 +395,9 @@ export function PluginInstallScreen(): ReactNode {
     return items;
   }
 
+  const isBrowsingCatalog = !typedSource && !query.trim();
+  const activeError = isBrowsingCatalog ? catalogError : searchError;
+
   const footerLabel =
     status.state === "error"
       ? `⚠︎ ${status.message}`
@@ -376,8 +405,8 @@ export function PluginInstallScreen(): ReactNode {
         ? status.message
         : status.state === "installed"
           ? `Installed ${status.title} — find its commands in the launcher`
-          : searchError
-            ? `⚠︎ ${searchError}`
+          : activeError
+            ? `⚠︎ ${activeError}`
             : "Store";
 
   return (
@@ -439,13 +468,15 @@ export function PluginInstallScreen(): ReactNode {
       menu={() => menu(selected)}
       onExit={pop}
       footerLabel={footerLabel}
-      loadingLabel="Searching extensions…"
+      loadingLabel={
+        query.trim() ? "Searching extensions…" : "Loading extensions…"
+      }
       emptyLabel={
-        query.trim()
-          ? searchError
-            ? "Couldn't reach the Store."
-            : "No extensions found."
-          : "Type to search thousands of extensions."
+        activeError
+          ? "Couldn't reach the Store."
+          : query.trim()
+            ? "No extensions found."
+            : "Type to search thousands of extensions."
       }
     />
   );

@@ -14,6 +14,7 @@ import {
   extractPackage,
   fetchStoreDetail,
   isPlatformSupported,
+  listStore,
   mapListing,
   resolveStoreExtension,
   safeRelativePath,
@@ -156,6 +157,53 @@ describe("searchStore", () => {
       [],
     );
     assert.equal(seen.length, 0);
+  });
+});
+
+describe("listStore", () => {
+  it("queries the default listing endpoint and drops kill-listed listings", async () => {
+    const seen: string[] = [];
+    const hits = await listStore({
+      perPage: 7,
+      fetch: jsonFetch(
+        {
+          data: [
+            { name: "a", title: "A" },
+            { name: "b", title: "B", kill_listed_at: 1700000000 },
+          ],
+        },
+        seen,
+      ),
+    });
+    assert.deepEqual(
+      hits.map((h) => h.name),
+      ["a"],
+    );
+    assert.match(
+      seen[0],
+      /^https:\/\/www\.raycast\.com\/frontend_api\/extensions\?page=1/,
+    );
+    assert.doesNotMatch(seen[0], /\/search\?/);
+  });
+
+  it("pages past the endpoint's fixed 10-per-page size to reach perPage", async () => {
+    const seen: string[] = [];
+    const fetchImpl: typeof fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      seen.push(url);
+      const page = new URL(url).searchParams.get("page");
+      const data = Array.from({ length: 10 }, (_, i) => ({
+        name: `p${page}-${i}`,
+        title: `P${page}-${i}`,
+      }));
+      return Response.json({ data });
+    }) as typeof fetch;
+    const hits = await listStore({ perPage: 15, fetch: fetchImpl });
+    assert.equal(hits.length, 15);
+    assert.deepEqual(
+      seen.map((u) => new URL(u).searchParams.get("page")),
+      ["1", "2"],
+    );
   });
 });
 
