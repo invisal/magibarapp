@@ -50,6 +50,13 @@ export const LONE_SUPER_HOTKEY = "Super";
 
 /** The `HotkeyWatcher` instance shape `@magibar/win`, `@magibar/mac`, and `@magibar/linux` all export. */
 interface NativeHotkeyWatcher {
+  /**
+   * Whether the OS-level hook was actually installed. Only `@magibar/mac`
+   * exports it (its `CGEventTap` is refused, silently, without the right
+   * privacy grants); absent elsewhere, where a load failure is the only
+   * failure mode.
+   */
+  isActive?(): boolean;
   register(id: string, accelerator: string): boolean;
   unregister(id: string): void;
   startCapture(callback: (error: Error | null, accelerator: string) => void): void;
@@ -62,6 +69,10 @@ interface NativeHotkeyModule {
   startHotkeyWatcher(
     callback: (error: Error | null, id: string) => void,
   ): NativeHotkeyWatcher;
+  /** mac only: whether Input Monitoring + Accessibility are both granted. Never prompts. */
+  hasEventAccess?(): boolean;
+  /** mac only: shows the system prompts for whichever grant is missing. */
+  requestEventAccess?(): boolean;
 }
 
 const nodeRequire = createRequire(import.meta.url);
@@ -113,8 +124,20 @@ interface HotkeyEngine {
  * `HotkeyWatcher`/`startHotkeyWatcher` shape `NativeHotkeyModule` describes,
  * even though what's underneath differs completely per platform.
  */
-function createNativeEngine(nativeModule: NativeHotkeyModule): HotkeyEngine {
+interface NativeEngine extends HotkeyEngine {
+  /** Whether the OS-level hook is installed (always true where the addon can't report otherwise). */
+  isActive(): boolean;
+  /**
+   * Tears the watcher down and starts a fresh one — what picks up a privacy
+   * grant made after launch, since a refused tap is never retried on its own.
+   * Bindings already registered are carried over. Returns `isActive()`.
+   */
+  restart(): boolean;
+}
+
+function createNativeEngine(nativeModule: NativeHotkeyModule): NativeEngine {
   const callbacks = new Map<string, () => void>();
+  const accelerators = new Map<string, string>();
   let watcher: NativeHotkeyWatcher | null = null;
 
   function ensureWatcher(): NativeHotkeyWatcher {
@@ -130,18 +153,33 @@ function createNativeEngine(nativeModule: NativeHotkeyModule): HotkeyEngine {
   }
 
   return {
+    isActive() {
+      return ensureWatcher().isActive?.() ?? true;
+    },
+    restart() {
+      watcher?.stop();
+      watcher = null;
+      const fresh = ensureWatcher();
+      for (const [id, accelerator] of accelerators) fresh.register(id, accelerator);
+      return fresh.isActive?.() ?? true;
+    },
     register(id, accelerator, onTrigger) {
       const ok = ensureWatcher().register(id, accelerator);
-      if (ok) callbacks.set(id, onTrigger);
+      if (ok) {
+        callbacks.set(id, onTrigger);
+        accelerators.set(id, accelerator);
+      }
       return ok;
     },
     unregister(id) {
       watcher?.unregister(id);
       callbacks.delete(id);
+      accelerators.delete(id);
     },
     unregisterAll() {
       for (const id of callbacks.keys()) watcher?.unregister(id);
       callbacks.clear();
+      accelerators.clear();
     },
     startCapture(onCapture) {
       ensureWatcher().startCapture((error, accelerator) => {
@@ -268,13 +306,121 @@ function createElectronEngine(): HotkeyEngine {
   };
 }
 
+/**
+ * Wraps the native engine with a `globalShortcut` fallback for when the OS
+ * refuses to install the hook. On mac that's the normal failure shape of a
+ * missing/stale Input Monitoring or Accessibility grant — the addon loads
+ * fine and `register()` "succeeds", but nothing would ever fire. In that
+ * state bindings go through `globalShortcut` instead (most combos still
+ * work; ones another app or the system owns, like Spotlight's `Cmd+Space`,
+ * and modifier-only chords don't), and every `register` re-tries the native
+ * hook first so a grant made while running is picked up without a relaunch.
+ */
+function createResilientEngine(native: NativeEngine): ResilientEngine {
+  const fallback = createElectronEngine();
+  const bindings = new Map<string, { accelerator: string; onTrigger: () => void }>();
+  let mode: "native" | "fallback" = native.isActive() ? "native" : "fallback";
+
+  function refreshMode(): "native" | "fallback" {
+    if (mode === "native") {
+      if (native.isActive()) return mode;
+      mode = "fallback";
+    }
+    if (native.restart()) {
+      // The hook came up (permission granted since): hand everything over.
+      fallback.unregisterAll();
+      for (const [id, { accelerator, onTrigger }] of bindings) {
+        native.register(id, accelerator, onTrigger);
+      }
+      mode = "native";
+    }
+    return mode;
+  }
+
+  function current(): HotkeyEngine {
+    return refreshMode() === "native" ? native : fallback;
+  }
+
+  return {
+    register(id, accelerator, onTrigger) {
+      const ok = current().register(id, accelerator, onTrigger);
+      if (ok) bindings.set(id, { accelerator, onTrigger });
+      return ok;
+    },
+    unregister(id) {
+      bindings.delete(id);
+      native.unregister(id);
+      fallback.unregister(id);
+    },
+    unregisterAll() {
+      bindings.clear();
+      native.unregisterAll();
+      fallback.unregisterAll();
+    },
+    startCapture: (onCapture) => current().startCapture(onCapture),
+    stopCapture() {
+      native.stopCapture();
+      fallback.stopCapture();
+    },
+    isDegraded: () => refreshMode() === "fallback",
+  };
+}
+
+interface ResilientEngine extends HotkeyEngine {
+  /** Whether bindings are running on the `globalShortcut` fallback because the native hook couldn't start. */
+  isDegraded(): boolean;
+}
+
 let engine: HotkeyEngine | undefined;
+let degradable: ResilientEngine | undefined;
 
 function hotkeyEngine(): HotkeyEngine {
   if (engine) return engine;
   const nativeModule = loadNative();
-  engine = nativeModule ? createNativeEngine(nativeModule) : createElectronEngine();
+  if (!nativeModule) {
+    engine = createElectronEngine();
+  } else {
+    const nativeEngine = createNativeEngine(nativeModule);
+    // Only mac's addon can report a refused hook; elsewhere it's all-or-nothing.
+    if (process.platform === "darwin") {
+      engine = degradable = createResilientEngine(nativeEngine);
+    } else {
+      engine = nativeEngine;
+    }
+  }
   return engine;
+}
+
+/**
+ * Whether the toggle/action hotkeys are running degraded — true only on mac,
+ * when the system refused the native hook (missing or stale privacy grant).
+ * Re-tries the hook as a side effect, so polling this also picks up a grant
+ * made in System Settings while the app is running.
+ */
+export function isHotkeyEngineDegraded(): boolean {
+  hotkeyEngine();
+  return degradable?.isDegraded() ?? false;
+}
+
+/**
+ * mac only: at startup, asks for Input Monitoring / Accessibility if either is
+ * missing. Requesting is what makes the app appear in those System Settings
+ * lists at all — macOS has no install-time hook and never lets an app add
+ * itself — and it shows the system prompt. macOS only prompts while a grant is
+ * undetermined (a denial is remembered), so calling this every launch never
+ * nags; Settings' repair row covers the denied/stale cases.
+ */
+export function requestHotkeyPermissionsIfMissing(): void {
+  if (process.platform !== "darwin") return;
+  const nativeModule = loadNative();
+  if (nativeModule?.hasEventAccess?.() === false) {
+    nativeModule.requestEventAccess?.();
+  }
+}
+
+/** mac only: shows the system permission prompts for whichever grant is missing. */
+export function requestHotkeyPermissions(): void {
+  loadNative()?.requestEventAccess?.();
 }
 
 /**

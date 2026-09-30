@@ -130,6 +130,69 @@ function AccessibilityRow() {
   );
 }
 
+/**
+ * mac only. Shown only while the native hotkey hook is refused (a missing, or
+ * stale-from-another-build, Input Monitoring/Accessibility grant) — the state
+ * where the toggle shortcut silently does nothing. Polls while visible so the
+ * row clears itself once the grant lands.
+ */
+function HotkeyPermissionRow() {
+  const [degraded, setDegraded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const check = (): void => {
+      window.api.hotkey.status().then((s) => {
+        if (!cancelled) setDegraded(s.degraded);
+      });
+    };
+    check();
+    const timer = setInterval(check, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  if (!degraded) return null;
+
+  async function repair(): Promise<void> {
+    setBusy(true);
+    try {
+      await window.api.hotkey.repair();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const buttonClass =
+    "rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-item-hover disabled:opacity-50";
+
+  return (
+    <Row
+      title="Global shortcuts aren't fully working"
+      description="macOS is blocking Magibar's keyboard access (Input Monitoring / Accessibility), so some shortcuts, like Cmd+Space, can't fire. Repair resets Magibar's permissions and asks again — allow both, then restart."
+    >
+      <div className="flex gap-2">
+        <button
+          disabled={busy}
+          onClick={() => void repair()}
+          className={buttonClass}
+        >
+          Repair Permissions
+        </button>
+        <button
+          onClick={() => window.api.hotkey.relaunchApp()}
+          className={buttonClass}
+        >
+          Restart Magibar
+        </button>
+      </div>
+    </Row>
+  );
+}
+
 function GapSizeRow() {
   const [gapPx, setGapPx] = useState<number | null>(null);
 
@@ -257,6 +320,7 @@ function Settings() {
             </button>
           </Row>
           <LaunchAtLoginRow />
+          {window.api.platform === "darwin" && <HotkeyPermissionRow />}
         </section>
 
         <section className="mt-6">

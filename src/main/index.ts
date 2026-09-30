@@ -13,10 +13,14 @@ import {
   unregisterAllHotkeys,
   startHotkeyCapture,
   stopHotkeyCapture,
+  isHotkeyEngineDegraded,
+  requestHotkeyPermissionsIfMissing,
 } from "./native/hotkeys";
+import { repairHotkeyPermissions } from "./native/hotkey-permissions";
 import {
   IPC_CHANNELS,
   type CalculatorSettings,
+  type HotkeyStatus,
   type RequestSubtitleOptions,
 } from "../shared/types";
 import {
@@ -388,6 +392,7 @@ app.whenReady().then(() => {
 
   registerUpdater(getLauncherWindow);
 
+  requestHotkeyPermissionsIfMissing();
   ensureToggleShortcutRegistered();
 
   ipcMain.handle(IPC_CHANNELS.hotkeyGet, () => {
@@ -395,6 +400,21 @@ app.whenReady().then(() => {
     // shows a binding as active that has silently stopped working.
     ensureToggleShortcutRegistered();
     return settings.getHotkey();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.hotkeyStatus, (): HotkeyStatus => {
+    // Checking re-tries the native hook; if that just succeeded, bindings
+    // were already handed over to it inside `registerHotkey`.
+    const degraded = isHotkeyEngineDegraded();
+    if (!degraded) ensureToggleShortcutRegistered();
+    return { degraded };
+  });
+
+  ipcMain.handle(IPC_CHANNELS.hotkeyRepair, () => repairHotkeyPermissions());
+
+  ipcMain.on(IPC_CHANNELS.appRelaunch, () => {
+    app.relaunch();
+    app.exit(0);
   });
 
   ipcMain.handle(IPC_CHANNELS.hotkeySet, (_event, accelerator: string) => {

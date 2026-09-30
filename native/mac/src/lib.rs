@@ -576,6 +576,12 @@ unsafe extern "C" {
   fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
   fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
   fn CGEventGetFlags(event: CGEventRef) -> u64;
+  // Preflight never prompts; Request shows the system prompt the first time
+  // (and is a no-op returning the current state afterward). macOS 10.15+.
+  fn CGPreflightListenEventAccess() -> bool;
+  fn CGRequestListenEventAccess() -> bool;
+  fn CGPreflightPostEventAccess() -> bool;
+  fn CGRequestPostEventAccess() -> bool;
 }
 
 const K_CG_SESSION_EVENT_TAP: u32 = 1;
@@ -1008,6 +1014,15 @@ pub struct HotkeyWatcher {
 
 #[napi]
 impl HotkeyWatcher {
+  /// Whether the event tap was actually created. `false` when macOS refused
+  /// it (Input Monitoring / Accessibility not granted, or a stale grant from
+  /// a differently-signed build) — `register()` still succeeds in that case,
+  /// but nothing will ever fire, so callers must check this and fall back.
+  #[napi]
+  pub fn is_active(&self) -> bool {
+    self.tap != 0
+  }
+
   /// Parses and stores `accelerator` under `id`, replacing whatever was
   /// previously registered under that id. Returns `false` if `accelerator`
   /// doesn't parse, or if a *different* id already holds the exact same
@@ -1176,5 +1191,25 @@ pub fn start_hotkey_watcher(callback: ThreadsafeFunction<String>) -> HotkeyWatch
     tap,
     run_loop,
     thread: Some(thread),
+  }
+}
+
+/// Whether both permissions the hotkey tap needs are currently granted —
+/// Input Monitoring (`ListenEvent`) and the Accessibility/`PostEvent` grant an
+/// *active* tap needs in order to swallow the keystroke. Never prompts.
+#[napi]
+pub fn has_event_access() -> bool {
+  unsafe { CGPreflightListenEventAccess() && CGPreflightPostEventAccess() }
+}
+
+/// Asks macOS to show its permission prompts for whichever of the two grants
+/// (see `has_event_access`) is still missing. Returns whether both are
+/// granted right now; a fresh grant usually still needs the tap re-created.
+#[napi]
+pub fn request_event_access() -> bool {
+  unsafe {
+    let listen = CGRequestListenEventAccess();
+    let post = CGRequestPostEventAccess();
+    listen && post
   }
 }
