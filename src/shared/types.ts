@@ -206,6 +206,12 @@ export interface HotkeySetResult {
   hotkey: string;
 }
 
+/** Result of a `hotkeyStatus` call. */
+export interface HotkeyStatus {
+  /** True when the native hook couldn't start and bindings run on the weaker `globalShortcut` fallback. */
+  degraded: boolean;
+}
+
 /** Auto-update state, pushed main -> launcher. */
 export type UpdateStatus =
   | { state: "idle" }
@@ -245,6 +251,15 @@ export const IPC_CHANNELS = {
   /** Settings window ↔ main: read / rebind the global toggle shortcut. */
   hotkeyGet: "settings:hotkey-get",
   hotkeySet: "settings:hotkey-set",
+  /**
+   * Settings window ↔ main (mac): whether hotkeys are running degraded because
+   * the system refused the native hook (`hotkeyStatus`, which also re-tries
+   * it), the one-click fix for stale privacy grants (`hotkeyRepair`), and a
+   * relaunch for grants that only take effect on a fresh process.
+   */
+  hotkeyStatus: "settings:hotkey-status",
+  hotkeyRepair: "settings:hotkey-repair",
+  appRelaunch: "app:relaunch",
   /**
    * Shared by every shortcut-recorder UI (the toggle row in Settings, and
    * `HotkeyPanel`'s per-action "Set Hotkey…" in the launcher window) — not

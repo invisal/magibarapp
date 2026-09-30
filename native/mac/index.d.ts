@@ -10,6 +10,13 @@
  */
 export declare class HotkeyWatcher {
   /**
+   * Whether the event tap was actually created. `false` when macOS refused
+   * it (Input Monitoring / Accessibility not granted, or a stale grant from
+   * a differently-signed build) — `register()` still succeeds in that case,
+   * but nothing will ever fire, so callers must check this and fall back.
+   */
+  isActive(): boolean
+  /**
    * Parses and stores `accelerator` under `id`, replacing whatever was
    * previously registered under that id. Returns `false` if `accelerator`
    * doesn't parse, or if a *different* id already holds the exact same
@@ -98,6 +105,13 @@ export declare function frontmostPid(exclude: number): number
  * (no focused window, invalid pid, or Accessibility access not granted).
  */
 export declare function getWindowRect(pid: number): MacRect | null
+
+/**
+ * Whether both permissions the hotkey tap needs are currently granted —
+ * Input Monitoring (`ListenEvent`) and the Accessibility/`PostEvent` grant an
+ * *active* tap needs in order to swallow the keystroke. Never prompts.
+ */
+export declare function hasEventAccess(): boolean
 
 /**
  * Whether the focused window is currently in native macOS fullscreen (its own
@@ -189,6 +203,13 @@ export interface NativeProcess {
  * bridging crate to enforce it for us here.
  */
 export declare function pasteboardChangeCount(): number
+
+/**
+ * Asks macOS to show its permission prompts for whichever of the two grants
+ * (see `has_event_access`) is still missing. Returns whether both are
+ * granted right now; a fresh grant usually still needs the tap re-created.
+ */
+export declare function requestEventAccess(): boolean
 
 /**
  * Starts the global-hotkey watcher: a background thread installs a

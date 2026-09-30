@@ -4,6 +4,7 @@ import {
   type CalculatorSettings,
   type ExecuteResult,
   type HotkeySetResult,
+  type HotkeyStatus,
   type QueryResult,
   type RequestSubtitleOptions,
   type UpdateStatus,
@@ -60,6 +61,12 @@ const api = {
     get: (): Promise<string> => ipcRenderer.invoke(IPC_CHANNELS.hotkeyGet),
     set: (accelerator: string): Promise<HotkeySetResult> =>
       ipcRenderer.invoke(IPC_CHANNELS.hotkeySet, accelerator),
+    /** mac: whether the native hook is refused (re-tries it, so polling picks up a fresh grant). */
+    status: (): Promise<HotkeyStatus> =>
+      ipcRenderer.invoke(IPC_CHANNELS.hotkeyStatus),
+    /** mac: resets stale privacy grants for this app and re-requests them. */
+    repair: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.hotkeyRepair),
+    relaunchApp: (): void => ipcRenderer.send(IPC_CHANNELS.appRelaunch),
     /**
      * Shared by every shortcut-recorder UI, not just this row — see the
      * `hotkeyCapture*` doc comment in `shared/types.ts`. A recorder calls
