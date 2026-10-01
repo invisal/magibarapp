@@ -74,8 +74,12 @@ nsis:
 
 mac:
   category: public.app-category.utilities
+  # The zip is what electron-updater (Squirrel.Mac) actually downloads and
+  # installs — it can't update from a dmg, so without it latest-mac.yml has no
+  # file to point at and macOS auto-update fails. The dmg is for first install.
   target:
     - dmg
+    - zip
   artifactName: ${productName}-${version}-${arch}.${ext}
   hardenedRuntime: true
   gatekeeperAssess: false

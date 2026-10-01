@@ -34,7 +34,10 @@ export function registerUpdater(
   });
   autoUpdater.on("update-downloaded", (info) => {
     set({ state: "ready", version: info.version });
-    autoUpdater.quitAndInstall();
+    // Silent install + relaunch, so Windows doesn't flash the installer UI and
+    // the app comes back on every platform (it's a tray app the user expects
+    // to keep running).
+    autoUpdater.quitAndInstall(true, true);
   });
   autoUpdater.on("error", (err) =>
     set({ state: "error", message: err?.message ?? "Update failed" }),
