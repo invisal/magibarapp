@@ -93,7 +93,12 @@ dmg:
 linux:
   target:
     - AppImage
+    - deb
+    - rpm
   category: Utility
+  # .deb requires a maintainer with an email (electron-builder errors without
+  # one); it's also shown in package managers. Replace with a real address.
+  maintainer: Visal In <noreply@magibar.app>
   artifactName: ${productName}-${version}-${arch}.${ext}
   # Run under XWayland: on a Wayland session Electron otherwise picks its
   # native Wayland backend, where GTK aborts at startup ("Can't create a
