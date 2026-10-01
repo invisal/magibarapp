@@ -9,7 +9,8 @@ import { readAppsCache, writeAppsCache } from "./cache";
 /**
  * Installed applications. On Windows: Start Menu shortcuts (`app:` ids) and
  * packaged apps (`pkg:` ids); on macOS: `.app` bundles (`app:` ids); on Linux:
- * `.desktop` entries (`app:` ids). The list
+ * `.desktop` entries (`app:` ids). On every platform, Steam library games
+ * without an entry of their own (`game:` ids). The list
  * comes from the native `listApplications()` capability, which is slow to run
  * cold, so this source persists each result (see
  * cache.ts), seeds from that on-disk copy, and refreshes in the background at
@@ -19,7 +20,11 @@ export class InstalledAppSource extends CachedActionSource {
   readonly id = "app";
 
   owns(actionId: string): boolean {
-    return actionId.startsWith("app:") || actionId.startsWith("pkg:");
+    return (
+      actionId.startsWith("app:") ||
+      actionId.startsWith("pkg:") ||
+      actionId.startsWith("game:")
+    );
   }
 
   protected async fetch(): Promise<ActionDefinition[]> {
@@ -90,7 +95,29 @@ function toActionDefinitions(result: AppsWorkerResult): ActionDefinition[] {
     }),
   );
 
-  const definitions = [...classicDefinitions, ...packagedDefinitions];
+  // Launcher-library games (game-libraries.ts) open through the launcher's URL
+  // scheme, which Steam registers on every platform.
+  const gameDefinitions: ActionDefinition[] = result.games.map((entry) => ({
+    action: {
+      id: `game:${entry.launcher}:${entry.gameId}`,
+      title: entry.title,
+      icon: entry.icon,
+      type: "application",
+    },
+    run: async () => {
+      try {
+        await shell.openExternal(entry.url);
+      } catch (error) {
+        console.error(`[main] Failed to open ${entry.title}:`, error);
+      }
+    },
+  }));
+
+  const definitions = [
+    ...classicDefinitions,
+    ...packagedDefinitions,
+    ...gameDefinitions,
+  ];
   return definitions.sort((a, b) =>
     a.action.title.localeCompare(b.action.title),
   );

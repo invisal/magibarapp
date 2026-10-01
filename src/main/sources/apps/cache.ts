@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { AppsWorkerResult } from "../../native";
 
 /** Bumped when the persisted shape changes, to invalidate old files. */
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 interface CacheFile {
   version: number;
@@ -33,7 +33,9 @@ function isValidResult(value: unknown): value is AppsWorkerResult {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<AppsWorkerResult>;
   return (
-    Array.isArray(candidate.shortcuts) && Array.isArray(candidate.packaged)
+    Array.isArray(candidate.shortcuts) &&
+    Array.isArray(candidate.packaged) &&
+    Array.isArray(candidate.games)
   );
 }
 
