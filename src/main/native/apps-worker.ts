@@ -10,9 +10,11 @@
  * Talks to its parent the same way the old PowerShell script did: reads nothing from
  * stdin, writes one JSON blob to stdout on completion.
  */
+import { readFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { extractIconPng, extractPackagedIconPng, listStartApps, resolveShortcut } from '@magibar/win'
+import { listLauncherGames, type GameAppResult } from './game-libraries'
 import * as iconCache from './icon-cache'
 
 const START_MENU_DIRS = [
@@ -27,6 +29,14 @@ const START_MENU_DIRS = [
 const MAX_DEPTH = 4
 const SKIP_NAME_PATTERN = /uninstall|read ?me|help|website|documentation|license/i
 const PACKAGED_ICON_SIZE = 48
+const SHORTCUT_EXTENSIONS = new Set(['.lnk', '.url'])
+/**
+ * `.url` Internet Shortcuts with these schemes are web pages ("Homepage", "Steam
+ * Support Center"), not apps. Anything else is an app protocol — `steam://rungameid/…`,
+ * `uplay://launch/…`, `com.epicgames.launcher://…` — which is how game launchers
+ * add their games to the Start Menu, so those are kept as apps.
+ */
+const WEB_URL_SCHEMES = new Set(['http', 'https', 'ftp', 'mailto', 'file'])
 
 export interface ShortcutAppResult {
   kind: 'shortcut'
@@ -65,9 +75,13 @@ export interface PackagedAppResult {
   icon?: string
 }
 
+export type { GameAppResult }
+
 export interface AppsWorkerResult {
   shortcuts: ShortcutAppResult[]
   packaged: PackagedAppResult[]
+  /** Launcher-library games with no shortcut of their own — see game-libraries.ts. */
+  games: GameAppResult[]
 }
 
 async function collectShortcuts(dir: string, depth = 0, results: string[] = []): Promise<string[]> {
@@ -84,7 +98,7 @@ async function collectShortcuts(dir: string, depth = 0, results: string[] = []):
     const fullPath = join(dir, entry.name)
     if (entry.isDirectory()) {
       await collectShortcuts(fullPath, depth + 1, results)
-    } else if (entry.isFile() && extname(entry.name).toLowerCase() === '.lnk') {
+    } else if (entry.isFile() && SHORTCUT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
       results.push(fullPath)
     }
   }
@@ -142,6 +156,74 @@ function resolveShortcutAssets(shortcutPath: string): { icon?: string; target?: 
   }
 }
 
+interface InternetShortcut {
+  url: string
+  iconFile?: string
+  iconIndex: number
+}
+
+/** Reads the `[InternetShortcut]` section of a `.url` file (an INI file, ANSI/UTF-8 or UTF-16). */
+function readInternetShortcut(shortcutPath: string): InternetShortcut | null {
+  let text: string
+  try {
+    const raw = readFileSync(shortcutPath)
+    text = raw[0] === 0xff && raw[1] === 0xfe ? raw.toString('utf16le') : raw.toString('utf8')
+  } catch {
+    return null
+  }
+
+  const values = new Map<string, string>()
+  let inSection = false
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (trimmed.startsWith('[')) {
+      inSection = trimmed.toLowerCase() === '[internetshortcut]'
+      continue
+    }
+    const eq = trimmed.indexOf('=')
+    if (inSection && eq > 0) values.set(trimmed.slice(0, eq).toLowerCase(), trimmed.slice(eq + 1).trim())
+  }
+
+  const url = values.get('url')
+  if (!url) return null
+  return {
+    url,
+    iconFile: values.get('iconfile') || undefined,
+    iconIndex: Number.parseInt(values.get('iconindex') ?? '0', 10) || 0
+  }
+}
+
+/** True for a `.url` that launches an app (see `WEB_URL_SCHEMES`), false for a web link. */
+function isAppUrlShortcut(shortcutPath: string): boolean {
+  const scheme = readInternetShortcut(shortcutPath)?.url.match(/^([a-z][a-z0-9+.-]*):/i)?.[1]
+  return Boolean(scheme) && !WEB_URL_SCHEMES.has(scheme!.toLowerCase())
+}
+
+/**
+ * The `.url` counterpart of `resolveShortcutAssets`: the icon comes from the
+ * shortcut's `IconFile` (game launchers point it at an `.ico` they cache per game).
+ * There's no `target` — the shortcut opens a protocol URL, not an executable.
+ */
+function resolveUrlShortcutAssets(shortcutPath: string): { icon?: string; target?: undefined } {
+  try {
+    const info = readInternetShortcut(shortcutPath)
+    const iconFile = info?.iconFile ? expandEnvironmentVariables(info.iconFile) : ''
+    if (!iconFile) return {}
+    const iconIndex = info?.iconIndex ?? 0
+
+    const key = iconCache.fileKey(iconFile, iconIndex)
+    const cached = iconCache.read(key)
+    if (cached) return { icon: toDataUrl(cached) }
+
+    const png = extractIconPng(iconFile, iconIndex)
+    if (png) iconCache.write(key, png)
+    return { icon: toDataUrl(png) }
+  } catch (error) {
+    console.error(`[apps-worker] Failed to resolve shortcut ${shortcutPath}:`, error)
+    return {}
+  }
+}
+
 function resolvePackagedIcon(appId: string): string | undefined {
   try {
     const key = iconCache.packagedKey(appId)
@@ -157,6 +239,10 @@ function resolvePackagedIcon(appId: string): string | undefined {
   }
 }
 
+function isUrlShortcut(shortcutPath: string): boolean {
+  return extname(shortcutPath).toLowerCase() === '.url'
+}
+
 async function main(): Promise<void> {
   const shortcutLists = await Promise.all(START_MENU_DIRS.map((dir) => collectShortcuts(dir)))
   const shortcutPaths = shortcutLists.flat()
@@ -165,12 +251,15 @@ async function main(): Promise<void> {
   const uniqueShortcutPaths = shortcutPaths.filter((shortcutPath) => {
     const name = basename(shortcutPath, extname(shortcutPath)).toLowerCase()
     if (SKIP_NAME_PATTERN.test(name) || seenNames.has(name)) return false
+    if (isUrlShortcut(shortcutPath) && !isAppUrlShortcut(shortcutPath)) return false
     seenNames.add(name)
     return true
   })
 
   const shortcuts: ShortcutAppResult[] = uniqueShortcutPaths.map((shortcutPath) => {
-    const { icon, target } = resolveShortcutAssets(shortcutPath)
+    const { icon, target } = isUrlShortcut(shortcutPath)
+      ? resolveUrlShortcutAssets(shortcutPath)
+      : resolveShortcutAssets(shortcutPath)
     return {
       kind: 'shortcut',
       path: shortcutPath,
@@ -203,7 +292,9 @@ async function main(): Promise<void> {
   // run so a transient failure to enumerate either source doesn't wipe the cache.
   if (shortcuts.length > 0 || packaged.length > 0) iconCache.prune()
 
-  const result: AppsWorkerResult = { shortcuts, packaged }
+  const games = await listLauncherGames([...shortcuts, ...packaged].map((entry) => entry.title))
+
+  const result: AppsWorkerResult = { shortcuts, packaged, games }
   process.stdout.write(JSON.stringify(result))
 }
 
