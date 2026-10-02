@@ -50,7 +50,7 @@ npm install   # resolves the matching native package and runs its install hook
 npm run dev
 ```
 
-The root `npm run build` only builds the Electron app — rebuild a native package from its own `native/<platform>` directory. `npm run dist` builds a Windows distributable (`electron-builder --win`); macOS/Linux packaging isn't configured yet.
+The root `npm run build` only builds the Electron app — rebuild a native package from its own `native/<platform>` directory. `npm run dist` builds a Windows distributable (`electron-builder --win`); macOS and Linux packaging live in `electron-builder.yml` (`dist:linux`, `release:linux`).
 
 ## Generated files
 

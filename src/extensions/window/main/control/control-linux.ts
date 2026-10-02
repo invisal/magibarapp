@@ -151,6 +151,13 @@ export function capture(exclude?: number): void {
   if (id !== 0) captured = { backend: "x11", id };
 }
 
+/** The X11 window captured before the launcher took focus, for callers that
+ *  need to know which app that was (`getFrontmostApplication`). `null` on
+ *  the GNOME backend — Mutter ids can't be resolved to a process from here. */
+export function capturedX11WindowId(): number | null {
+  return captured?.backend === "x11" ? captured.id : null;
+}
+
 function restoreKey(target: CapturedWindow): string {
   return `linux:${target.backend}:${target.id}`;
 }

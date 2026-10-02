@@ -77,3 +77,23 @@ jobs:
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: npx electron-builder --linux AppImage --dir --publish never
+
+  # Not a gate for macOS-only extensions failing — just proves the engine loads
+  # real Store extensions on Linux. Network-dependent, so it can't block merges.
+  raycast-linux:
+    name: Raycast compat (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Raycast compat smoke test
+        run: node --disable-warning=ExperimentalWarning scripts/raycast-compat.ts emoji github brew

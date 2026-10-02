@@ -204,7 +204,11 @@ export interface ShowInFinderProps {
 }
 
 function ShowInFinder({
-  title = process.platform === "win32" ? "Show in Explorer" : "Show in Finder",
+  title = process.platform === "win32"
+    ? "Show in Explorer"
+    : process.platform === "linux"
+      ? "Show in File Manager"
+      : "Show in Finder",
   path,
   icon,
   shortcut,
