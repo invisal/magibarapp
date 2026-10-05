@@ -196,6 +196,7 @@ class ListHostManager {
             type: "error",
             instanceId,
             message: message.message,
+            auth: message.auth,
           }),
         );
         return;

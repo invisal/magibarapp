@@ -13,7 +13,11 @@
  * `new OAuth.PKCEClient(...)` don't break loading) but failing loudly when
  * actually used.
  */
-import { unsupportedComponent, unsupportedFunction } from "./unsupported.ts";
+import {
+  OAuthRequiredError,
+  unsupportedComponent,
+  unsupportedFunction,
+} from "./unsupported.ts";
 import { getEnvironment, type Environment } from "./apis/environment.ts";
 import { LocalStorage } from "./apis/local-storage.ts";
 
@@ -146,17 +150,20 @@ export const AI = {
 class PKCEClient {
   readonly providerName: string;
   readonly providerId?: string;
+  readonly providerIcon?: unknown;
   readonly description?: string;
   readonly redirectMethod: string;
 
   constructor(options: {
     providerName: string;
     providerId?: string;
+    providerIcon?: unknown;
     description?: string;
     redirectMethod: string;
   }) {
     this.providerName = options.providerName;
     this.providerId = options.providerId;
+    this.providerIcon = options.providerIcon;
     this.description = options.description;
     this.redirectMethod = options.redirectMethod;
   }
@@ -166,8 +173,10 @@ class PKCEClient {
   }
 
   async authorizationRequest(): Promise<never> {
-    throw new Error(
-      `Signing in with ${this.providerName} isn't supported in Magibar yet. If this extension has an access-token preference, set it in the extension's preferences instead.`,
+    throw new OAuthRequiredError(
+      this.providerName,
+      this.providerIcon,
+      this.description,
     );
   }
 

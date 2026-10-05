@@ -297,12 +297,26 @@ export interface PluginFormTree extends PluginViewTreeBase {
 export type PluginViewTree =
   PluginListTree | PluginDetailTree | PluginGridTree | PluginFormTree;
 
+/** What an extension's `OAuth.PKCEClient` asked the user to sign in to — sent
+ *  with a render error so the renderer can show a sign-in screen instead of
+ *  a bare message. `icon` is already resolved (a `data:` URI / glyph). */
+export interface PluginAuthRequest {
+  providerName: string;
+  description?: string;
+  icon?: string;
+}
+
 /** Sent main -> renderer for one `PluginListScreen` instance. */
 export type PluginHostMessage =
   | { type: "render"; instanceId: string; tree: PluginViewTree }
   /** An unsupported top-level component (Form/Grid/MenuBarExtra/…) threw
    *  during render — see `api-shim/src/unsupported.ts`. */
-  | { type: "error"; instanceId: string; message: string }
+  | {
+      type: "error";
+      instanceId: string;
+      message: string;
+      auth?: PluginAuthRequest;
+    }
   /** `popToRoot()` — the screen collapses its own route stack back to the
    *  launcher root, mirroring real Raycast (see `host/list-host-manager.ts`). */
   | { type: "pop-to-root"; instanceId: string }

@@ -99,6 +99,7 @@ function PluginView({
       <PluginErrorScreen
         title={title}
         message={view.errorMessage}
+        auth={view.authRequest}
         onConfigure={
           pluginId
             ? () => push({ name: "plugin-preferences", payload: { pluginId } })
@@ -197,7 +198,7 @@ function ToastBar({ toast }: { toast: PluginToast | null }): ReactNode {
         : "✓";
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-11 z-50 flex justify-center px-4">
-      <div className="flex max-w-full items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-1.5 text-xs shadow-lg">
+      <div className="flex max-w-full items-center gap-2 rounded-md border border-border bg-background/95 px-3 py-1.5 text-xs text-foreground shadow-lg">
         {glyph ? (
           <span
             className={
@@ -209,7 +210,9 @@ function ToastBar({ toast }: { toast: PluginToast | null }): ReactNode {
         ) : (
           <span className="h-3 w-3 animate-spin rounded-full border-2 border-foreground-subtle border-t-transparent" />
         )}
-        <span className="truncate font-medium">{visible.title}</span>
+        <span className="truncate font-medium text-foreground">
+          {visible.title}
+        </span>
         {visible.message ? (
           <span className="truncate text-foreground-subtle">
             {visible.message}

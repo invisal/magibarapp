@@ -6,6 +6,7 @@
  * themselves.
  */
 import { createElement, type ReactNode } from "react";
+import { Action } from "./Action.ts";
 
 export interface ActionPanelSectionProps {
   title?: string;
@@ -40,4 +41,6 @@ function ActionPanelRoot({ children }: ActionPanelProps) {
 export const ActionPanel = Object.assign(ActionPanelRoot, {
   Section: ActionPanelSection,
   Submenu: ActionPanelSubmenu,
+  /** Legacy name for `Action` (some Store extensions still use it). */
+  Item: Action,
 });

@@ -39,7 +39,9 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
     // macOS gets its blur from `electron-liquid-glass` (applied after the window
     // is created). That native view needs a transparent window with `vibrancy`
     // unset — combining the two makes the compositing wrong.
-    ...(process.platform === "darwin" ? { transparent: true } : {}),
+    ...(process.platform === "darwin"
+      ? { transparent: true, vibrancy: "popover" }
+      : {}),
     ...(process.platform === "linux" ? { transparent: true } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.mjs"),

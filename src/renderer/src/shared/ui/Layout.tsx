@@ -28,7 +28,9 @@ function LayoutRoot({
   children: ReactNode;
 }) {
   return (
-    <div className={cn("flex h-full min-h-0 flex-col", className)}>
+    <div
+      className={cn("flex h-full min-h-0 flex-col text-foreground", className)}
+    >
       {children}
     </div>
   );

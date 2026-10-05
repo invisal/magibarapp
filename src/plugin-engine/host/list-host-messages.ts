@@ -5,7 +5,12 @@
  * those channels, unlike `protocol.ts`'s types, which also cross into the
  * renderer.
  */
-import type { HostEffect, HostRequest, PluginViewTree } from "./protocol.ts";
+import type {
+  HostEffect,
+  HostRequest,
+  PluginAuthRequest,
+  PluginViewTree,
+} from "./protocol.ts";
 
 /** Everything a host process needs to run one command — resolved by
  *  `PluginHostSource` from the registry entry at launch time. */
@@ -65,7 +70,7 @@ export type ListHostParentMessage =
 /** List host -> main */
 export type ListHostChildMessage =
   | { type: "render"; tree: PluginViewTree }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; auth?: PluginAuthRequest }
   | { type: "effect"; effect: HostEffect }
   | HostRequestMessage
   /** Both fire-and-forget: unlike `effect`, these target *this* instance's
