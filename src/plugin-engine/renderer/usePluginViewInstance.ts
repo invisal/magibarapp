@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouteStack } from "@renderer/screens/launcher/router/context";
 import type {
+  PluginAuthRequest,
   PluginHostMessage,
   PluginInboundEvent,
   PluginViewTree,
@@ -23,6 +24,8 @@ export interface PluginToast {
 export interface PluginViewInstance {
   tree: PluginViewTree | null;
   errorMessage: string | null;
+  /** Set with `errorMessage` when the command needs a sign-in. */
+  authRequest: PluginAuthRequest | null;
   /** The command's current `showToast()`, if any (`null` once hidden). */
   toast: PluginToast | null;
   invokeAction(actionId: string): void;
@@ -37,6 +40,9 @@ export function usePluginViewInstance(
   const { reset } = useRouteStack();
   const [tree, setTree] = useState<PluginViewTree | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [authRequest, setAuthRequest] = useState<PluginAuthRequest | null>(
+    null,
+  );
   const [toast, setToast] = useState<PluginToast | null>(null);
 
   // Read via a ref inside the effect below rather than adding `handlers` to
@@ -50,6 +56,7 @@ export function usePluginViewInstance(
   useEffect(() => {
     setTree(null);
     setErrorMessage(null);
+    setAuthRequest(null);
     setToast(null);
     window.api.pluginList.attach(instanceId, actionId);
     const unsubscribe = window.api.pluginList.onMessage(
@@ -59,9 +66,11 @@ export function usePluginViewInstance(
           case "render":
             setTree(message.tree);
             setErrorMessage(null);
+            setAuthRequest(null);
             return;
           case "error":
             setErrorMessage(message.message);
+            setAuthRequest(message.auth ?? null);
             return;
           case "pop-to-root":
             reset();
@@ -84,6 +93,7 @@ export function usePluginViewInstance(
   return {
     tree,
     errorMessage,
+    authRequest,
     toast,
     invokeAction(id: string): void {
       window.api.pluginList.sendEvent(instanceId, {

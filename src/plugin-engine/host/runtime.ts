@@ -35,7 +35,10 @@ import {
 } from "../api-shim/src/host-bridge.ts";
 import { createPluginRoot, flushSync } from "../api-shim/src/reconciler.ts";
 import * as navigation from "../api-shim/src/navigation.ts";
-import { missingApi } from "../api-shim/src/unsupported.ts";
+import {
+  missingApi,
+  UnsupportedApiError,
+} from "../api-shim/src/unsupported.ts";
 import type { CommandRunInput } from "./list-host-messages.ts";
 
 /* ------------------------------ module hook ------------------------------ */
@@ -67,11 +70,49 @@ const apiModule = new Proxy({ ...raycastApi } as Record<string, unknown>, {
   },
 });
 
+/**
+ * An element whose type is `undefined` is an `@raycast/api` sub-component the
+ * shim doesn't have (`<Foo.Bar>` with no `Bar`) — React reports it as the
+ * minified error #130, which tells the user nothing. Swap in a component that
+ * throws a plain-language error when rendered, so the screen can say what's
+ * wrong; the props hint at which element it was.
+ */
+function describeMissing(props: unknown): string {
+  const p = (props ?? {}) as Record<string, unknown>;
+  const hint = [p.title, p.name, p.id].find((v) => typeof v === "string");
+  return `This extension uses a component Magibar doesn't support yet${
+    hint ? ` ("${hint}")` : ""
+  }.`;
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: wraps React's overloaded jsx fns
+function guardJsx<F extends (...args: any[]) => unknown>(jsxFn: F): F {
+  return ((type: unknown, props: unknown, ...rest: unknown[]) => {
+    const safeType =
+      type === undefined
+        ? function MissingComponent(): never {
+            throw new UnsupportedApiError(describeMissing(props));
+          }
+        : type;
+    return jsxFn(safeType, props, ...rest);
+  }) as F;
+}
+
+const guardedJsxRuntime = {
+  ...jsxRuntime,
+  jsx: guardJsx(jsxRuntime.jsx),
+  jsxs: guardJsx(jsxRuntime.jsxs),
+};
+const guardedJsxDevRuntime = {
+  ...jsxDevRuntime,
+  jsxDEV: guardJsx(jsxDevRuntime.jsxDEV),
+};
+
 const MODULE_OVERRIDES: Record<string, unknown> = {
   "@raycast/api": apiModule,
   react: React,
-  "react/jsx-runtime": jsxRuntime,
-  "react/jsx-dev-runtime": jsxDevRuntime,
+  "react/jsx-runtime": guardedJsxRuntime,
+  "react/jsx-dev-runtime": guardedJsxDevRuntime,
 };
 
 let hookInstalled = false;

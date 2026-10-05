@@ -99,6 +99,7 @@ function PluginView({
       <PluginErrorScreen
         title={title}
         message={view.errorMessage}
+        auth={view.authRequest}
         onConfigure={
           pluginId
             ? () => push({ name: "plugin-preferences", payload: { pluginId } })

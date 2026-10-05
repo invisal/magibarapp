@@ -55,7 +55,8 @@ function start(input: ListStartInput): void {
   try {
     instance = startView(input, {
       sendRenderTree: (tree) => send({ type: "render", tree }),
-      sendRenderError: (message) => send({ type: "error", message }),
+      sendRenderError: (message, auth) =>
+        send({ type: "error", message, auth }),
       sendEffect: (effect) => send({ type: "effect", effect }),
       request: requests.request,
       popToRoot: () => send({ type: "pop-to-root" }),
