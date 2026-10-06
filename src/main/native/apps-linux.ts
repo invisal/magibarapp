@@ -29,6 +29,7 @@ import { access, readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join } from 'node:path'
 import type { AppsWorkerResult, ShortcutAppResult } from './apps-worker'
+import { listLauncherGames } from './game-libraries.ts'
 import {
   desktopFileId,
   isLaunchable,
@@ -464,7 +465,12 @@ export async function listLinuxApplications(): Promise<AppsWorkerResult> {
     .filter((item): item is ShortcutAppResult => item !== null)
     .sort((a, b) => a.title.localeCompare(b.title))
 
-  return { shortcuts, packaged: [] }
+  // Native Steam exports a `.desktop` file per game, but Flatpak Steam writes
+  // them inside its sandbox and "create shortcut" can be unticked, so Steam's
+  // own library fills in whatever the scan above didn't find.
+  const games = await listLauncherGames(shortcuts.map((shortcut) => shortcut.title))
+
+  return { shortcuts, packaged: [], games }
 }
 
 /** Spawns a detached child, resolving once it is actually running. */

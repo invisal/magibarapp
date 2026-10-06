@@ -24,6 +24,7 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { AppsWorkerResult, ShortcutAppResult } from './apps-worker'
+import { listLauncherGames } from './game-libraries'
 
 const execFileAsync = promisify(execFile)
 
@@ -312,5 +313,9 @@ export async function listMacApplications(): Promise<AppsWorkerResult> {
     icon: icons[index]
   }))
 
-  return { shortcuts, packaged: [] }
+  // Steam games live under ~/Library/Application Support/Steam, outside every
+  // app root above, so they come from Steam's own library instead.
+  const games = await listLauncherGames(shortcuts.map((shortcut) => shortcut.title))
+
+  return { shortcuts, packaged: [], games }
 }
