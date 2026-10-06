@@ -48,7 +48,7 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-    }, 
+    },
   });
 
   if (process.platform === "darwin") {
