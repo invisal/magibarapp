@@ -10,10 +10,13 @@
  * command are routed to its own screen by `list-host-manager.ts`.
  */
 import { execFile } from "node:child_process";
+import { readFile, readlink } from "node:fs/promises";
+import { basename } from "node:path";
 import { promisify } from "node:util";
 import { app, Notification, clipboard, dialog, shell } from "electron";
 import { getLauncherWindow, hideLauncher } from "@main/window";
 import { listApplications } from "@main/native/apps";
+import { capturedX11WindowId } from "@extensions/window/main/control/control";
 import { sendPasteKeystroke } from "@extensions/clipboard-history/main/paste";
 import type {
   ConfirmAlertOptions,
@@ -37,6 +40,13 @@ async function openTarget(target: string, application?: string): Promise<void> {
     ]);
     return;
   }
+  if (application && process.platform === "linux") {
+    const desktopFile = await findLinuxDesktopFile(application);
+    if (desktopFile) {
+      await execFileAsync("gio", ["launch", desktopFile, target]);
+      return;
+    }
+  }
   const looksLikeUrl =
     /^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[a-z]:\\/i.test(target);
   if (looksLikeUrl) {
@@ -45,6 +55,22 @@ async function openTarget(target: string, application?: string): Promise<void> {
     const error = await shell.openPath(target);
     if (error) throw new Error(error);
   }
+}
+
+/** `open(target, application)` on Linux: `application` is whatever the
+ *  extension got from `getApplications()` — a desktop file ID, a `.desktop`
+ *  path, or a display name. */
+async function findLinuxDesktopFile(
+  application: string,
+): Promise<string | null> {
+  const wanted = application.toLowerCase().replace(/\.desktop$/, "");
+  const match = (await applications()).find(
+    (candidate) =>
+      candidate.path === application ||
+      candidate.bundleId?.toLowerCase() === wanted ||
+      candidate.name.toLowerCase() === wanted,
+  );
+  return match?.path.endsWith(".desktop") ? match.path : null;
 }
 
 /** Effects every host kind shares. `toast` here is the no-view (native
@@ -136,7 +162,11 @@ async function applications(): Promise<HostApplication[]> {
   const apps: HostApplication[] = (result?.shortcuts ?? []).map((app) => ({
     name: app.title,
     path: app.path,
-    bundleId: undefined,
+    // Linux: the desktop file ID is the closest thing to a bundle id.
+    bundleId:
+      process.platform === "linux" && app.path.endsWith(".desktop")
+        ? basename(app.path, ".desktop")
+        : undefined,
   }));
   for (const app of result?.packaged ?? []) {
     apps.push({ name: app.title, path: app.appId, bundleId: app.appId });
@@ -145,8 +175,45 @@ async function applications(): Promise<HostApplication[]> {
   return apps;
 }
 
+/** Linux (X11/XWayland): resolve the window captured before the launcher
+ *  opened to an app via its `WM_CLASS` and owning pid. */
+async function linuxFrontmostApplication(): Promise<HostApplication> {
+  const id = capturedX11WindowId();
+  if (id === null) {
+    throw new Error(
+      "getFrontmostApplication() needs an X11 window — unavailable on this session",
+    );
+  }
+  const { stdout } = await execFileAsync("xprop", [
+    "-id",
+    String(id),
+    "WM_CLASS",
+    "_NET_WM_PID",
+  ]);
+  const classes = [...stdout.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  const pid = /_NET_WM_PID\(CARDINAL\) = (\d+)/.exec(stdout)?.[1];
+  const wmClass = classes[1] || classes[0];
+  if (!wmClass) throw new Error("couldn't determine the frontmost application");
+
+  let comm = "";
+  let exe = "";
+  if (pid) {
+    comm = (await readFile(`/proc/${pid}/comm`, "utf8").catch(() => "")).trim();
+    exe = await readlink(`/proc/${pid}/exe`).catch(() => "");
+  }
+  const wanted = [wmClass, comm].filter(Boolean).map((v) => v.toLowerCase());
+  const match = (await applications()).find(
+    (candidate) =>
+      wanted.includes(candidate.name.toLowerCase()) ||
+      (candidate.bundleId !== undefined &&
+        wanted.includes(candidate.bundleId.toLowerCase())),
+  );
+  return match ?? { name: wmClass, path: exe || wmClass, bundleId: undefined };
+}
+
 /** The app that was frontmost before the launcher took focus (macOS). */
 async function frontmostApplication(): Promise<HostApplication> {
+  if (process.platform === "linux") return linuxFrontmostApplication();
   if (process.platform !== "darwin") {
     throw new Error("getFrontmostApplication() is only supported on macOS");
   }
@@ -178,6 +245,32 @@ async function defaultApplication(target: string): Promise<HostApplication> {
   };
 }
 
+/** Linux: the primary selection, i.e. whatever text is highlighted right
+ *  now (or was last — X11 keeps it until something else is selected). */
+async function selectedText(): Promise<string> {
+  if (process.platform !== "linux") {
+    throw new Error(
+      "Unable to get selected text: not supported in Magibar yet",
+    );
+  }
+  const readers: Array<[string, string[]]> = [
+    ["xclip", ["-o", "-selectio00n", "primary"]],
+    ["xsel", ["--primary", "--output"]],
+  ];
+  if (process.env.WAYLAND_DISPLAY) {
+    readers.unshift(["wl-paste", ["--primary", "--no-newline"]]);
+  }
+  let text = "";
+  for (const [command, args] of readers) {
+    text = await execFileAsync(command, args, { timeout: 2000 })
+      .then((result) => result.stdout)
+      .catch(() => "");
+    if (text) break;
+  }
+  if (!text) throw new Error("Unable to get selected text");
+  return text;
+}
+
 export async function handleHostRequest(
   request: HostRequest,
 ): Promise<unknown> {
@@ -195,6 +288,8 @@ export async function handleHostRequest(
       return frontmostApplication();
     case "get-default-application":
       return defaultApplication(request.path);
+    case "get-selected-text":
+      return selectedText();
     case "trash":
       for (const path of request.paths) await shell.trashItem(path);
       return null;

@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -209,5 +209,54 @@ describe("startView", () => {
     view.handleSelectionChanged(idless.id);
     assert.equal(titles().at(-1), "selected: null");
     view.dispose();
+  });
+});
+
+describe("Raycast-shaped bundles", () => {
+  it("renders an unknown Action sub-component as an explaining action", async () => {
+    const bundle = join(dir, "tolerant.js");
+    writeFileSync(
+      bundle,
+      `const { List, ActionPanel, Action } = require("@raycast/api");
+const { jsx, jsxs } = require("react/jsx-runtime");
+module.exports.default = () => jsx(List, { children: jsx(List.Item, { title: "x",
+  actions: jsxs(ActionPanel, { children: [jsx(Action.InstallSomethingNew, { title: "Install" }), jsx(List.Item.Fancy, {})] }) }) });`,
+    );
+    let tree: PluginViewTree | null = null;
+    let error: string | null = null;
+    const view = startView(input(bundle, { bundlePath: bundle }), {
+      sendRenderTree: (t) => (tree = t),
+      sendRenderError: (m) => (error = m),
+      sendEffect() {},
+      request: async () => null,
+      popToRoot() {},
+      clearSearchBar() {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    view.dispose();
+    assert.equal(error, null);
+    assert.match(JSON.stringify(tree), /"Install"/);
+    assert.ok(getMissingApiNames().includes("Action.InstallSomethingNew"));
+  });
+
+  it("finds its assets next to __dirname", async () => {
+    mkdirSync(join(dir, "plugin", "dist"), { recursive: true });
+    mkdirSync(join(dir, "plugin", "source", "assets"), { recursive: true });
+    writeFileSync(
+      join(dir, "plugin", "source", "assets", "data.json"),
+      '{"title":"from assets"}',
+    );
+    const bundle = join(dir, "plugin", "dist", "cmd.js");
+    writeFileSync(
+      bundle,
+      `const { title } = JSON.parse(require("fs").readFileSync(require("path").join(__dirname, "assets/data.json"), "utf8"));
+module.exports.default = async () => require("@raycast/api").showHUD(title);`,
+    );
+    const effects: HostEffect[] = [];
+    await runNoView(input(bundle, { bundlePath: bundle }), {
+      sendEffect: (effect) => effects.push(effect),
+      request: async () => null,
+    });
+    assert.deepEqual(effects, [{ op: "hud", title: "from assets" }]);
   });
 });

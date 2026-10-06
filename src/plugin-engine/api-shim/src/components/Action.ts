@@ -14,6 +14,7 @@
  */
 import { createElement, type ReactNode } from "react";
 import { getHostTransport } from "../host-bridge.ts";
+import { hostPlatform } from "../platform.ts";
 import { useNavigation } from "../navigation.ts";
 import { Clipboard, open } from "../apis/clipboard.ts";
 import { showInFinder, trash } from "../apis/system.ts";
@@ -204,7 +205,11 @@ export interface ShowInFinderProps {
 }
 
 function ShowInFinder({
-  title = process.platform === "win32" ? "Show in Explorer" : "Show in Finder",
+  title = hostPlatform === "win32"
+    ? "Show in Explorer"
+    : hostPlatform === "linux"
+      ? "Show in File Manager"
+      : "Show in Finder",
   path,
   icon,
   shortcut,

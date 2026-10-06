@@ -396,6 +396,7 @@ export type HostRequest =
   | { method: "get-applications"; path?: string }
   | { method: "get-frontmost-application" }
   | { method: "get-default-application"; path: string }
+  | { method: "get-selected-text" }
   | { method: "trash"; paths: string[] };
 
 /** `@raycast/api`'s `Application`. */

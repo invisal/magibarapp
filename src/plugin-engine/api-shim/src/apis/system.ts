@@ -42,10 +42,13 @@ export async function trash(path: string | string[]): Promise<void> {
 }
 
 /** Real Raycast rejects both of these when nothing is selected, so
- *  extensions already handle a rejection gracefully — reading another app's
- *  selection needs accessibility plumbing Magibar doesn't have yet. */
+ *  extensions already handle a rejection gracefully. Selected text is only
+ *  readable on Linux (the primary selection) — elsewhere it needs
+ *  accessibility plumbing Magibar doesn't have yet. */
 export async function getSelectedText(): Promise<string> {
-  throw new Error("Unable to get selected text: not supported in Magibar yet");
+  return (await getHostTransport().request({
+    method: "get-selected-text",
+  })) as string;
 }
 
 export async function getSelectedFinderItems(): Promise<{ path: string }[]> {

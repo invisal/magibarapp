@@ -23,6 +23,11 @@ import type {
 } from "@plugin-engine/host/protocol";
 import type { LaunchOptionsInput } from "@plugin-engine/host/ipc-preload";
 
+/** The launcher window is transparent, so a screen with no background of its
+ *  own shows the one beneath it through — every launcher screen paints its
+ *  own (see `PluginErrorScreen`, `ListScreen`). */
+const SCREEN_CLASS = "h-screen w-screen overflow-hidden bg-background";
+
 interface ContinueWith {
   actionId: string;
   options: LaunchOptionsInput;
@@ -308,7 +313,7 @@ function PreferencesForm({
     : "Preferences";
 
   return (
-    <Layout>
+    <Layout className={SCREEN_CLASS}>
       <Layout.Header title={title} onBack={pop} />
       <Layout.Content>
         {!data ? (
@@ -415,7 +420,7 @@ function ArgumentsForm({
   useShortcut({ Escape: pop, "CommandOrControl+Enter": () => void submit() });
 
   return (
-    <Layout>
+    <Layout className={SCREEN_CLASS}>
       <Layout.Header title={`${title} — ${pluginTitle}`} onBack={pop} />
       <Layout.Content>
         <FieldsForm

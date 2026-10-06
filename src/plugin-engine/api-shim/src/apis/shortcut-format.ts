@@ -9,6 +9,7 @@
  * `shortcut` prop is passed straight through as plain host-node data (see
  * `components/Action.ts`), converted to the wire format at commit time.
  */
+import { hostPlatform } from "../platform.ts";
 
 export interface KeyboardShortcut {
   modifiers?: string[];
@@ -67,7 +68,7 @@ function isKeyboardShortcut(value: unknown): value is KeyboardShortcut {
  *  empty string. */
 export function toAccelerator(
   value: unknown,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = hostPlatform,
 ): string | undefined {
   if (typeof value === "string") return value;
   if (value && typeof value === "object" && !("key" in value)) {

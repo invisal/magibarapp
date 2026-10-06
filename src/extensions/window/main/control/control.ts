@@ -68,6 +68,11 @@ export function captureFocusedWindow(excludeHandle?: number): void {
   }
 }
 
+/** Linux/X11: id of the window focused before the launcher opened. */
+export function capturedX11WindowId(): number | null {
+  return process.platform === "linux" ? linux.capturedX11WindowId() : null;
+}
+
 export function applyRegion(region: SnapRegion): Promise<boolean> {
   return impl()?.applyRegion(region) ?? Promise.resolve(false);
 }

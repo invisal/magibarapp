@@ -50,6 +50,7 @@ import {
   type RaycastManifest,
   type RaycastManifestCommand,
 } from "../manifest.ts";
+import { scanBundlesForMacOnlyUsage } from "./linux-compat.ts";
 import { pluginIdFromName } from "../paths.ts";
 import type { PluginRegistryEntry, PluginSourceRef } from "../registry.ts";
 import type { InstallSourceInput, InstallStage } from "../host/protocol.ts";
@@ -218,6 +219,16 @@ async function stageStore(
     if (!existsSync(built)) continue;
     await rename(built, join(distDir, `${command.name}.js`));
     commands.push(command);
+  }
+  if (platform === "linux") {
+    const macOnly = await scanBundlesForMacOnlyUsage(distDir);
+    if (macOnly.size > 0) {
+      const detail = [...macOnly]
+        .map(([name, labels]) => `${name} (${labels.join(", ")})`)
+        .join("; ");
+      progress("extracting", `Heads up — macOS-only on Linux: ${detail}`);
+      console.warn(`[plugin-engine] ${id}: macOS-only usage — ${detail}`);
+    }
   }
   if (commands.length === 0) {
     throw new InstallError(

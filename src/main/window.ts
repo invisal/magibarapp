@@ -42,7 +42,7 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
     ...(process.platform === "darwin"
       ? { transparent: true, vibrancy: "popover" }
       : {}),
-    ...(process.platform === "linux" ? { transparent: true } : {}),
+    ...(process.platform === "linux" ? { transparent: false } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,

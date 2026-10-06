@@ -45,6 +45,20 @@
   --color-background: rgb(10 9 8 / 90%);
 }
 
+/* The app is dark everywhere; say so, or Chromium draws native controls (the
+   `<select>` popup list, scrollbars) in the system's light theme — on Linux
+   that's pale text on a pale list. Options still get explicit colors because
+   a GTK-themed popup doesn't always follow `color-scheme`. */
+:root {
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background-color: var(--color-popover);
+  color: var(--color-foreground);
+}
+
 html,
 body,
 #root {
