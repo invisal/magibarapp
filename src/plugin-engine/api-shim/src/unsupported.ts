@@ -15,6 +15,30 @@ export class UnsupportedApiError extends Error {
   }
 }
 
+/** Thrown by `OAuth.PKCEClient` when an extension needs a browser sign-in,
+ *  which Magibar can't do (no Raycast OAuth redirect proxy). Carries the
+ *  provider so the screen can explain what's needed rather than show a bare
+ *  error — see `reconciler.ts`'s `authRequestOf`. */
+export class OAuthRequiredError extends UnsupportedApiError {
+  readonly providerName: string;
+  readonly providerIcon?: unknown;
+  readonly providerDescription?: string;
+
+  constructor(
+    providerName: string,
+    providerIcon?: unknown,
+    providerDescription?: string,
+  ) {
+    super(
+      `Signing in with ${providerName} isn't supported in Magibar yet. If this extension has an access-token preference, set it in the extension's preferences instead.`,
+    );
+    this.name = "OAuthRequiredError";
+    this.providerName = providerName;
+    this.providerIcon = providerIcon;
+    this.providerDescription = providerDescription;
+  }
+}
+
 function message(name: string): string {
   return `"${name}" is not supported in Magibar yet.`;
 }

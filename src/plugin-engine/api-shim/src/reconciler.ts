@@ -27,6 +27,7 @@ import type {
   PluginAccessory,
   PluginActionNode,
   PluginActionPanelNode,
+  PluginAuthRequest,
   PluginDetailBody,
   PluginDetailMetadataItem,
   PluginDetailTree,
@@ -55,6 +56,7 @@ import {
   type Pagination,
 } from "./host-bridge.ts";
 import { getPluginContext } from "./context.ts";
+import { OAuthRequiredError } from "./unsupported.ts";
 import { NavigationRoot } from "./navigation.ts";
 import { filterHostChildren } from "./components/searchFilter.ts";
 import { iconGlyph, isRaycastIconName } from "./icon-glyphs.ts";
@@ -222,6 +224,16 @@ function onRecoverableError(error: unknown): void {
   console.error("[plugin-engine] recoverable render error:", error);
 }
 
+/** An `OAuthRequiredError` -> the sign-in details the renderer shows. */
+function authRequestOf(error: unknown): PluginAuthRequest | undefined {
+  if (!(error instanceof OAuthRequiredError)) return undefined;
+  return {
+    providerName: error.providerName,
+    description: error.providerDescription,
+    icon: icon(error.providerIcon),
+  };
+}
+
 /** Catches a top-level unsupported view (`Detail`/`Form`/`Grid` throw as soon
  *  as React tries to render them — see `unsupported.ts`) and reports it
  *  through the transport instead of leaving the tree in a half-rendered
@@ -241,6 +253,7 @@ class RootBoundary extends Component<
   componentDidCatch(error: unknown): void {
     getHostTransport().sendRenderError(
       error instanceof Error ? error.message : String(error),
+      authRequestOf(error),
     );
   }
 

@@ -456,7 +456,14 @@ export class PluginHostSource implements ActionSource {
       supportPath: pluginSupportDir(this.pluginsRoot, entry.id),
       assetsPath: pluginAssetsDir(this.pluginsRoot, entry.id),
       preferenceValues: resolvePreferenceValues(entry, commandName),
-      launchArguments: options.arguments ?? {},
+      // Raycast hands every declared argument over, "" when left blank —
+      // extensions do `props.arguments.url.trim()` without a guard.
+      launchArguments: {
+        ...Object.fromEntries(
+          (command?.arguments ?? []).map((a) => [a.name, ""]),
+        ),
+        ...options.arguments,
+      },
       launchContext: options.launchContext,
       fallbackText: options.fallbackText,
     };

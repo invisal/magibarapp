@@ -38,7 +38,7 @@ export const framelessChrome: BrowserWindowConstructorOptions = {
         // baseline: `y: 16` sits the button cluster ~5px low, most visible
         // next to a short title like "Welcome to Magibar".
         trafficLightPosition: { x: 16, y: 11 },
-        vibrancy: "under-window" as const,
+        vibrancy: "popover" as const,
       }
     : process.platform === "win32"
       ? { frame: false, backgroundMaterial: "acrylic" as const }

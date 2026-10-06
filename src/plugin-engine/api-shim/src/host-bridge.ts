@@ -17,6 +17,7 @@ import type {
   ConfirmAlertOptions,
   HostEffect,
   HostRequest,
+  PluginAuthRequest,
   PluginViewTree,
 } from "../../host/protocol.ts";
 
@@ -25,7 +26,7 @@ export type { ConfirmAlertOptions, HostEffect, HostRequest };
 export interface HostTransport {
   /** List mode only — no-view has no tree to push. */
   sendRenderTree(tree: PluginViewTree): void;
-  sendRenderError(message: string): void;
+  sendRenderError(message: string, auth?: PluginAuthRequest): void;
   sendEffect(effect: HostEffect): void;
   /** A round trip to main (clipboard reads, `confirmAlert`, application
    *  lookups, …) — live in both modes: List mode over `parentPort`, no-view
