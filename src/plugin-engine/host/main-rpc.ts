@@ -18,7 +18,6 @@ import { getLauncherWindow, hideLauncher } from "@main/window";
 import { listApplications } from "@main/native/apps";
 import { capturedX11WindowId } from "@extensions/window/main/control/control";
 import { sendPasteKeystroke } from "@extensions/clipboard-history/main/paste";
-import { macBundleIdFor } from "./linux-bundle-ids.ts";
 import type {
   ConfirmAlertOptions,
   HostApplication,
@@ -69,7 +68,6 @@ async function findLinuxDesktopFile(
     (candidate) =>
       candidate.path === application ||
       candidate.bundleId?.toLowerCase() === wanted ||
-      basename(candidate.path, ".desktop").toLowerCase() === wanted ||
       candidate.name.toLowerCase() === wanted,
   );
   return match?.path.endsWith(".desktop") ? match.path : null;
@@ -164,12 +162,10 @@ async function applications(): Promise<HostApplication[]> {
   const apps: HostApplication[] = (result?.shortcuts ?? []).map((app) => ({
     name: app.title,
     path: app.path,
-    // Linux: the macOS bundle id extensions look for, else the desktop
-    // file ID — the closest thing to one.
+    // Linux: the desktop file ID is the closest thing to a bundle id.
     bundleId:
       process.platform === "linux" && app.path.endsWith(".desktop")
-        ? (macBundleIdFor(basename(app.path, ".desktop")) ??
-          basename(app.path, ".desktop"))
+        ? basename(app.path, ".desktop")
         : undefined,
   }));
   for (const app of result?.packaged ?? []) {
@@ -258,7 +254,7 @@ async function selectedText(): Promise<string> {
     );
   }
   const readers: Array<[string, string[]]> = [
-    ["xclip", ["-o", "-selection", "primary"]],
+    ["xclip", ["-o", "-selectio00n", "primary"]],
     ["xsel", ["--primary", "--output"]],
   ];
   if (process.env.WAYLAND_DISPLAY) {
