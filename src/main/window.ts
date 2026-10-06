@@ -40,13 +40,13 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
     // is created). That native view needs a transparent window with `vibrancy`
     // unset — combining the two makes the compositing wrong.
     ...(process.platform === "darwin" ? { transparent: true } : {}),
-    ...(process.platform === "linux" ? { transparent: true } : {}),
+    ...(process.platform === "linux" ? { transparent: false } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-    },
+    }, 
   });
 
   if (process.platform === "darwin") {

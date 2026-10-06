@@ -1,3 +1,4 @@
+import { linuxBinDir } from "./linux-binaries.ts";
 import { ensureLinuxShimDir, withLinuxShimPath } from "./linux-shims.ts";
 
 /**
@@ -11,7 +12,8 @@ import { ensureLinuxShimDir, withLinuxShimPath } from "./linux-shims.ts";
  * stays importable without Electron (see `no-view-runner.test.ts`).
  *
  * On Linux, `PATH` also gets stand-ins for macOS tools extensions shell out
- * to (see `linux-shims.ts`).
+ * to (see `linux-shims.ts`), and the directory Linux builds of extension
+ * helper binaries are downloaded to (see `linux-binaries.ts`).
  */
 export function hostEnv(): NodeJS.ProcessEnv {
   const packaged = !!process.versions.electron && !process.defaultApp;
@@ -20,8 +22,13 @@ export function hostEnv(): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV ?? (packaged ? "production" : "development"),
   };
   if (process.platform === "linux") {
+    // Shims written in JS (`sqlite3`) run on this same binary as plain Node.
+    env.MAGIBAR_NODE = process.execPath;
     try {
-      env.PATH = withLinuxShimPath(env.PATH, ensureLinuxShimDir());
+      env.PATH = withLinuxShimPath(
+        withLinuxShimPath(env.PATH, ensureLinuxShimDir()),
+        linuxBinDir(env),
+      );
     } catch (error) {
       console.error(
         "[plugin-engine] couldn't write macOS command shims:",

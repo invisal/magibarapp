@@ -8,6 +8,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { SQLITE3_SHIM_SCRIPT } from "./sqlite3-shim.ts";
 
 const OPEN = `#!/bin/sh
 # macOS \`open\`: drop -a/-b <app> and flags, hand the targets to xdg-open.
@@ -46,11 +47,37 @@ echo "osascript: AppleScript isn't available on Linux — this Raycast extension
 exit 1
 `;
 
+/** macOS \`sw_vers\`, answered from /etc/os-release. */
+const SW_VERS = `#!/bin/sh
+NAME=Linux; VERSION_ID=; BUILD_ID=
+[ -r /etc/os-release ] && . /etc/os-release
+build=\${BUILD_ID:-$(uname -r)}
+case "$1" in
+  -productName) echo "$NAME" ;;
+  -productVersion) echo "\${VERSION_ID:-$(uname -r)}" ;;
+  -buildVersion) echo "$build" ;;
+  *) printf 'ProductName:\\t\\t%s\\nProductVersion:\\t\\t%s\\nBuildVersion:\\t\\t%s\\n' "$NAME" "\${VERSION_ID:-$(uname -r)}" "$build" ;;
+esac
+`;
+
+/** Runs on Magibar's own Node (`MAGIBAR_NODE`, set by `hostEnv`). */
+const SQLITE3 = `#!/bin/sh
+if [ -z "$MAGIBAR_NODE" ]; then echo "sqlite3: install sqlite3" >&2; exit 127; fi
+ELECTRON_RUN_AS_NODE=1 exec "$MAGIBAR_NODE" "$(dirname "$0")/support/sqlite3.cjs" "$@"
+`;
+
 export const LINUX_SHIMS: Record<string, string> = {
   open: OPEN,
   pbcopy: PBCOPY,
   pbpaste: PBPASTE,
   osascript: OSASCRIPT,
+  sqlite3: SQLITE3,
+  sw_vers: SW_VERS,
+};
+
+/** Non-command files the shims run, under `support/` (off `PATH`). */
+const SHIM_SUPPORT: Record<string, string> = {
+  "sqlite3.cjs": SQLITE3_SHIM_SCRIPT,
 };
 
 /** Writes the shims (idempotently) and returns their directory. */
@@ -62,6 +89,10 @@ export function ensureLinuxShimDir(
     const file = join(base, name);
     writeFileSync(file, body, { mode: 0o755 });
     chmodSync(file, 0o755);
+  }
+  mkdirSync(join(base, "support"), { recursive: true });
+  for (const [name, body] of Object.entries(SHIM_SUPPORT)) {
+    writeFileSync(join(base, "support", name), body);
   }
   return base;
 }

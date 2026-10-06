@@ -18,6 +18,7 @@ import { getLauncherWindow, hideLauncher } from "@main/window";
 import { listApplications } from "@main/native/apps";
 import { capturedX11WindowId } from "@extensions/window/main/control/control";
 import { sendPasteKeystroke } from "@extensions/clipboard-history/main/paste";
+import { macBundleIdFor } from "./linux-bundle-ids.ts";
 import type {
   ConfirmAlertOptions,
   HostApplication,
@@ -68,6 +69,7 @@ async function findLinuxDesktopFile(
     (candidate) =>
       candidate.path === application ||
       candidate.bundleId?.toLowerCase() === wanted ||
+      basename(candidate.path, ".desktop").toLowerCase() === wanted ||
       candidate.name.toLowerCase() === wanted,
   );
   return match?.path.endsWith(".desktop") ? match.path : null;
@@ -162,10 +164,12 @@ async function applications(): Promise<HostApplication[]> {
   const apps: HostApplication[] = (result?.shortcuts ?? []).map((app) => ({
     name: app.title,
     path: app.path,
-    // Linux: the desktop file ID is the closest thing to a bundle id.
+    // Linux: the macOS bundle id extensions look for, else the desktop
+    // file ID — the closest thing to one.
     bundleId:
       process.platform === "linux" && app.path.endsWith(".desktop")
-        ? basename(app.path, ".desktop")
+        ? (macBundleIdFor(basename(app.path, ".desktop")) ??
+          basename(app.path, ".desktop"))
         : undefined,
   }));
   for (const app of result?.packaged ?? []) {
@@ -245,6 +249,32 @@ async function defaultApplication(target: string): Promise<HostApplication> {
   };
 }
 
+/** Linux: the primary selection, i.e. whatever text is highlighted right
+ *  now (or was last — X11 keeps it until something else is selected). */
+async function selectedText(): Promise<string> {
+  if (process.platform !== "linux") {
+    throw new Error(
+      "Unable to get selected text: not supported in Magibar yet",
+    );
+  }
+  const readers: Array<[string, string[]]> = [
+    ["xclip", ["-o", "-selection", "primary"]],
+    ["xsel", ["--primary", "--output"]],
+  ];
+  if (process.env.WAYLAND_DISPLAY) {
+    readers.unshift(["wl-paste", ["--primary", "--no-newline"]]);
+  }
+  let text = "";
+  for (const [command, args] of readers) {
+    text = await execFileAsync(command, args, { timeout: 2000 })
+      .then((result) => result.stdout)
+      .catch(() => "");
+    if (text) break;
+  }
+  if (!text) throw new Error("Unable to get selected text");
+  return text;
+}
+
 export async function handleHostRequest(
   request: HostRequest,
 ): Promise<unknown> {
@@ -262,6 +292,8 @@ export async function handleHostRequest(
       return frontmostApplication();
     case "get-default-application":
       return defaultApplication(request.path);
+    case "get-selected-text":
+      return selectedText();
     case "trash":
       for (const path of request.paths) await shell.trashItem(path);
       return null;

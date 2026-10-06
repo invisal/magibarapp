@@ -16,7 +16,11 @@
  * Imports nothing from Electron, so `node --test` can load it directly (see
  * `runtime.test.ts`).
  */
+import fs, { existsSync } from "node:fs";
+import fsPromises from "node:fs/promises";
 import Module from "node:module";
+import os from "node:os";
+import { dirname, join } from "node:path";
 import { createElement, type ComponentType } from "react";
 import * as React from "react";
 import * as jsxRuntime from "react/jsx-runtime";
@@ -36,7 +40,10 @@ import {
 import { createPluginRoot, flushSync } from "../api-shim/src/reconciler.ts";
 import * as navigation from "../api-shim/src/navigation.ts";
 import { missingApi } from "../api-shim/src/unsupported.ts";
+import { hostPlatform } from "../api-shim/src/platform.ts";
 import type { CommandRunInput } from "./list-host-messages.ts";
+import { wrapChildProcess } from "./linux-binaries.ts";
+import { wrapFsModule } from "./linux-paths.ts";
 
 /* ------------------------------ module hook ------------------------------ */
 
@@ -50,7 +57,76 @@ export function getMissingApiNames(): string[] {
 
 const IGNORED_MISSING = new Set(["__esModule", "then", "default", "toJSON"]);
 
-const apiModule = new Proxy({ ...raycastApi } as Record<string, unknown>, {
+function reportMissing(name: string): void {
+  if (missingApiNames.has(name)) return;
+  missingApiNames.add(name);
+  console.warn(`[plugin-engine] @raycast/api "${name}" is not implemented`);
+}
+
+interface MissingActionProps {
+  title?: string;
+  icon?: unknown;
+  shortcut?: Parameters<typeof raycastApi.Action>[0]["shortcut"];
+}
+
+/** Stand-in for a sub-component Raycast added after this shim was written
+ *  (`Action.InstallMCPServer`): an action that explains itself, or nothing —
+ *  either way the rest of the view still renders. */
+function missingSubComponent(name: string): ComponentType<MissingActionProps> {
+  if (!name.startsWith("Action.")) return () => null;
+  return ({ title, icon, shortcut }) =>
+    createElement(raycastApi.Action, {
+      title: title ?? name.slice("Action.".length),
+      icon,
+      shortcut,
+      onAction: async () => {
+        await raycastApi.showToast({
+          style: raycastApi.Toast.Style.Failure,
+          title: `"${name}" is not supported in Magibar yet.`,
+        });
+      },
+    });
+}
+
+/** A component namespace (`List`, `Action`, …) whose unknown capitalized
+ *  members come back as `missingSubComponent`s instead of `undefined` —
+ *  which React would turn into an error for the whole view. */
+function tolerantComponent<T extends object>(component: T, path: string): T {
+  const members = new Map<string, unknown>();
+  return new Proxy(component, {
+    get(target, prop, receiver) {
+      const value: unknown = Reflect.get(target, prop, receiver);
+      if (typeof prop !== "string" || !/^[A-Z]/.test(prop)) return value;
+      let member = members.get(prop);
+      if (member === undefined) {
+        const name = `${path}.${prop}`;
+        if (value === undefined) reportMissing(name);
+        member =
+          value === undefined
+            ? missingSubComponent(name)
+            : typeof value === "function"
+              ? tolerantComponent(value, name)
+              : value;
+        members.set(prop, member);
+      }
+      return member;
+    },
+  });
+}
+
+const apiExports: Record<string, unknown> = { ...raycastApi };
+for (const name of [
+  "Action",
+  "ActionPanel",
+  "Detail",
+  "Form",
+  "Grid",
+  "List",
+] as const) {
+  apiExports[name] = tolerantComponent(raycastApi[name], name);
+}
+
+const apiModule = new Proxy(apiExports, {
   get(target, prop, receiver) {
     if (
       typeof prop !== "string" ||
@@ -59,10 +135,7 @@ const apiModule = new Proxy({ ...raycastApi } as Record<string, unknown>, {
     ) {
       return Reflect.get(target, prop, receiver);
     }
-    if (!missingApiNames.has(prop)) {
-      missingApiNames.add(prop);
-      console.warn(`[plugin-engine] @raycast/api "${prop}" is not implemented`);
-    }
+    reportMissing(prop);
     return missingApi(prop);
   },
 });
@@ -74,11 +147,54 @@ const MODULE_OVERRIDES: Record<string, unknown> = {
   "react/jsx-dev-runtime": jsxDevRuntime,
 };
 
+/**
+ * Linux: extensions only know macOS and Windows — many build their paths and
+ * app tables in `if (darwin) … if (win32) …` and leave Linux with nothing,
+ * or refuse "unsupported operating system". So the plugin hosts present
+ * Linux as macOS (`process.platform`, `os.platform()`, `os.type()`), and map
+ * what the macOS branch then reaches for onto Linux: paths (linux-paths.ts),
+ * helper binaries and tool paths (linux-binaries.ts), and the tools
+ * themselves (linux-shims.ts). Magibar's own shim code reads the real
+ * platform from `api-shim/src/platform.ts`. `MAGIBAR_REAL_PLATFORM=1` turns
+ * the disguise off, for debugging.
+ */
+const presentAsMacOS =
+  hostPlatform === "linux" && !process.env.MAGIBAR_REAL_PLATFORM;
+
+if (hostPlatform === "linux") {
+  const overrides: Record<string, unknown> = {
+    child_process: wrapChildProcess(),
+    fs: wrapFsModule(fs),
+    "fs/promises": wrapFsModule(fsPromises),
+  };
+  if (presentAsMacOS) {
+    overrides.os = new Proxy(os, {
+      get: (target, prop, receiver) =>
+        prop === "platform"
+          ? () => "darwin"
+          : prop === "type"
+            ? () => "Darwin"
+            : Reflect.get(target, prop, receiver),
+    });
+  }
+  for (const [name, module] of Object.entries(overrides)) {
+    MODULE_OVERRIDES[name] = module;
+    MODULE_OVERRIDES[`node:${name}`] = module;
+  }
+}
+
 let hookInstalled = false;
 
 export function installModuleHook(): void {
   if (hookInstalled) return;
   hookInstalled = true;
+  if (presentAsMacOS) {
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      enumerable: true,
+      configurable: true,
+    });
+  }
   const M = Module as unknown as {
     _load(request: string, parent: unknown, isMain: boolean): unknown;
   };
@@ -100,11 +216,27 @@ export interface LaunchProps {
   fallbackText?: string;
 }
 
+/** Raycast ships command bundles next to `assets/`, so bundles read
+ *  `join(__dirname, "assets", …)`; ours live in `dist/` with the assets in
+ *  `source/assets` (see `paths.ts`) — link one to the other. */
+function linkAssets(bundlePath: string): void {
+  const link = join(dirname(bundlePath), "assets");
+  const target = join(dirname(bundlePath), "..", "source", "assets");
+  if (existsSync(link) || !existsSync(target)) return;
+  try {
+    // A junction needs no privileges on Windows; elsewhere the type is ignored.
+    fs.symlinkSync(target, link, "junction");
+  } catch (error) {
+    console.warn("[plugin-engine] couldn't link assets for __dirname:", error);
+  }
+}
+
 /** `require`s a command bundle and returns its default export. Must run
  *  *after* `configurePluginContext`: a bundle's own top-level code often
  *  reads `getPreferenceValues()`/`environment` at module-eval time. */
 export function loadCommand(bundlePath: string): CommandFunction {
   installModuleHook();
+  linkAssets(bundlePath);
   const mod = Module.createRequire(bundlePath)(bundlePath) as
     { default?: unknown } | CommandFunction;
   const exported =
