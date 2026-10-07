@@ -131,7 +131,7 @@ function SearchItem({
         "flex h-10 cursor-default items-center gap-2 rounded px-1 py-1",
         highlighted
           ? "bg-item-selected text-foreground"
-          : "hover:bg-item-hover",
+          : "in-data-[nav=mouse]:hover:bg-item-hover",
         className,
       )}
     >
