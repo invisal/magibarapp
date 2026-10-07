@@ -456,6 +456,7 @@ function LauncherScreen() {
         ) : undefined
       }
       autoRefocus
+      selectOnClick
       onActivate={runRow}
       onExit={() => window.api.hide()}
       menu={buildMenuActions}

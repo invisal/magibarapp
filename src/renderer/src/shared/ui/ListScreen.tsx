@@ -44,7 +44,10 @@ import { ListScrollRootContext } from "./useOnceVisible";
  * `highlighted` is the keyboard cursor only — the row Enter, the ⌘K menu and
  * `onInputKeyDown` act on. The mouse never moves it; a hovered row gets a
  * plain CSS `:hover` background instead (give `ListScreen.Item` one — it
- * already has `hover:bg-item-hover`).
+ * already has `hover:bg-item-hover`). That hover background is suppressed
+ * while the user is arrow-keying (`data-nav="keys"` on the root, flipped back
+ * to `"mouse"` by the next real pointer movement), so the screen only ever
+ * shows one highlight at a time.
  *
  * Plain DOM, not virtualized — fine for the few hundred rows a launcher list
  * holds. Rows carry `content-visibility: auto` so the browser skips
@@ -163,7 +166,7 @@ const Item = forwardRef<HTMLDivElement, ItemProps>(function Item(
         "flex h-10 cursor-default items-center gap-2 rounded px-1 py-1",
         highlighted
           ? "bg-item-selected text-foreground"
-          : "hover:bg-item-hover",
+          : "in-data-[nav=mouse]:hover:bg-item-hover",
         className,
       )}
     >
@@ -218,7 +221,7 @@ const GridItem = forwardRef<HTMLDivElement, GridItemProps>(function GridItem(
         "flex cursor-default flex-col gap-1 rounded p-2",
         highlighted
           ? "bg-item-selected text-foreground"
-          : "hover:bg-item-hover",
+          : "in-data-[nav=mouse]:hover:bg-item-hover",
         className,
       )}
     >
@@ -372,6 +375,12 @@ interface ListScreenBaseProps<T> {
    *  programmatically. The user can still move the highlight afterwards.
    *  List layout only. */
   highlightId?: string;
+  /**
+   * List layout only. A mouse click just moves the highlight to the row;
+   * `onActivate` fires on double-click instead. Enter still activates the
+   * highlighted row, as it does without this prop.
+   */
+  selectOnClick?: boolean;
 }
 
 /** How close to the end (rows, or row heights of scroll) counts as "the
@@ -379,6 +388,17 @@ interface ListScreenBaseProps<T> {
 const END_REACHED_ROWS = 5;
 
 type ListScreenProps<T> = ListScreenBaseProps<T>;
+
+const NAV_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+]);
 
 interface Group<T> {
   value: string;
@@ -418,6 +438,7 @@ function ListScreenRoot<T>({
   onMenuOpenChange,
   onEndReached,
   highlightId,
+  selectOnClick = false,
 }: ListScreenProps<T>) {
   const { stack, pop } = useRouteStack();
   const controlled = inputValue !== undefined;
@@ -429,6 +450,10 @@ function ListScreenRoot<T>({
   };
 
   const [highlighted, setHighlighted] = useState<T | null>(null);
+  // True from the first real arrow-key move until the pointer actually moves
+  // again; drives `data-nav` on the root, which rows key their hover style on.
+  const [keyboardNav, setKeyboardNav] = useState(false);
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const [menuOpen, setMenuOpenState] = useState(false);
   const setMenuOpen = (open: boolean) => {
     setMenuOpenState(open);
@@ -531,22 +556,31 @@ function ListScreenRoot<T>({
       // Cleared only once it runs — a re-render cancelling this frame
       // must leave the request for the rerun.
       pendingHighlightRef.current = undefined;
-      const dispatch = (key: string) =>
-        input.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      dispatch("Home");
-      for (let i = 0; i < index; i++) dispatch("ArrowDown");
+      moveHighlightTo(index);
     });
     return () => cancelAnimationFrame(raf);
     // `highlighted` is read, not tracked — only new data or a new target
     // should trigger a move.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [highlightId, ordered, getId, layout]);
+
+  // Base UI has no controlled highlight, so move it the way a user would —
+  // Home, then ArrowDown once per selectable row before `index` (its keyboard
+  // walk skips disabled rows). Synthetic events are untrusted, so they don't
+  // count as keyboard navigation for the hover suppression below.
+  function moveHighlightTo(index: number): void {
+    const input = inputRef.current;
+    if (!input) return;
+    const dispatch = (key: string) =>
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    const steps = ordered
+      .slice(0, index)
+      .filter((item) => !isDisabled?.(item)).length;
+    dispatch("Home");
+    for (let i = 0; i < steps; i++) dispatch("ArrowDown");
+  }
 
   const gridContainerStyle: CSSProperties = {
     display: "grid",
@@ -566,6 +600,7 @@ function ListScreenRoot<T>({
   }
 
   function onInputKeyDown(e: KeyboardEvent<HTMLInputElement>): void {
+    if (e.isTrusted && NAV_KEYS.has(e.key)) setKeyboardNav(true);
     onExtraInputKeyDown?.(e, menuTarget);
     if (e.defaultPrevented) return;
     if (e.key === "Escape") {
@@ -591,6 +626,17 @@ function ListScreenRoot<T>({
       ? customFooter({ inputRef })
       : customFooter;
 
+  // Only genuine pointer movement hands the hover style back: scrolling under
+  // a stationary cursor (which arrow-keying does) makes the browser emit a
+  // mousemove at unchanged coordinates, and that must not count.
+  function onPointerMove(e: MouseEvent<HTMLElement>): void {
+    const last = lastPointerRef.current;
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    if (last && (last.x !== e.clientX || last.y !== e.clientY)) {
+      setKeyboardNav(false);
+    }
+  }
+
   const renderRow = (item: T) => {
     const disabled = isDisabled?.(item) ?? false;
     return (
@@ -598,7 +644,21 @@ function ListScreenRoot<T>({
         key={getId(item)}
         value={item}
         disabled={disabled}
-        onClick={(e) => !disabled && onActivate?.(item, e)}
+        onClick={(e) => {
+          if (disabled) return;
+          // Real clicks carry `detail >= 1`; Base UI's Enter-on-highlight
+          // click has `detail === 0`, and that one must still activate.
+          if (selectOnClick && layout === "list" && e.detail > 0) {
+            moveHighlightTo(ordered.indexOf(item));
+            return;
+          }
+          onActivate?.(item, e);
+        }}
+        onDoubleClick={(e) => {
+          if (!disabled && selectOnClick && layout === "list") {
+            onActivate?.(item, e);
+          }
+        }}
         onContextMenu={(e) => {
           if (disabled) return;
           e.preventDefault();
@@ -647,7 +707,11 @@ function ListScreenRoot<T>({
         onHighlightChange?.(value, reason);
       }}
     >
-      <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
+      <div
+        data-nav={keyboardNav ? "keys" : "mouse"}
+        onMouseMove={onPointerMove}
+        className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground"
+      >
         <div className="flex items-center gap-1 border-b border-border px-2 p-1 [-webkit-app-region:drag]">
           {canGoBack ? (
             <button
