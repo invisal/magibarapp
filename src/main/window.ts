@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { BrowserWindow, screen, shell } from "electron";
 import { join } from "node:path";
 import { applyLiquidGlass } from "./native";
 import { restoredPosition } from "./window-chrome";
@@ -49,6 +49,22 @@ export function createLauncherWindow(keepOpen: () => boolean): BrowserWindow {
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  // Links in plugin content (markdown, metadata) must never navigate the
+  // launcher itself — there's no back button — so hand http(s) URLs to the
+  // default browser and swallow everything else.
+  const openInBrowser = (url: string) => {
+    if (/^https?:|^mailto:/i.test(url)) void shell.openExternal(url);
+  };
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openInBrowser(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (event, url) => {
+    if (url === win.webContents.getURL()) return;
+    event.preventDefault();
+    openInBrowser(url);
   });
 
   if (process.platform === "darwin") {

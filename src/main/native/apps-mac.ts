@@ -70,6 +70,13 @@ const APP_ROOTS = [
  */
 const CORE_SERVICE_APPS = new Set(['/System/Library/CoreServices/Finder.app'])
 
+/**
+ * Apps some bundles ship inside themselves for launching on their own —
+ * Xcode's Instruments, Device Hub and FileMerge, Finder's AirDrop and Recents.
+ * Spotlight and Raycast list them like any other app.
+ */
+const EMBEDDED_APPS_DIR = '.app/Contents/Applications/'
+
 function isInAppRoot(path: string): boolean {
   return APP_ROOTS.some((root) => {
     if (!path.startsWith(`${root}/`)) return false
@@ -94,52 +101,75 @@ function isInAppRoot(path: string): boolean {
  * is cheap insurance, and `isTopLevelApp` already drops the background agents it
  * drags in from `/System/Library/CoreServices` alongside Finder.
  */
-async function collectAppPaths(): Promise<string[]> {
-  const [indexed, scanned] = await Promise.all([spotlightAppPaths(), scanAppDirs()])
-  return [...new Set([...indexed, ...scanned])]
+async function collectAppPaths(): Promise<{ paths: string[]; displayNames: Map<string, string> }> {
+  const [displayNames, scanned] = await Promise.all([spotlightApps(), scanAppDirs()])
+  return { paths: [...new Set([...displayNames.keys(), ...scanned])], displayNames }
 }
 
-/** `.app` bundles Spotlight knows about; empty if it fails or indexing is off. */
-async function spotlightAppPaths(): Promise<string[]> {
+/** One `mdfind -attr` output line: `<path>   kMDItemDisplayName = <name>`. */
+const MDFIND_LINE = /^(.+\.app)\s+kMDItemDisplayName = (.*)$/
+
+/**
+ * `.app` bundles Spotlight knows about, each mapped to its display name —
+ * the name Finder and Raycast show, which can differ from the bundle's file
+ * name ("Device Hub" for `DeviceHub.app`) and is localized. Empty if mdfind
+ * fails or indexing is off.
+ */
+async function spotlightApps(): Promise<Map<string, string>> {
+  const apps = new Map<string, string>()
   try {
     const { stdout } = await execFileAsync(
       'mdfind',
-      ["kMDItemContentType == 'com.apple.application-bundle'"],
+      ['-attr', 'kMDItemDisplayName', "kMDItemContentType == 'com.apple.application-bundle'"],
       { maxBuffer: 16 * 1024 * 1024 }
     )
-    return stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.endsWith('.app'))
+    for (const line of stdout.split('\n')) {
+      const match = MDFIND_LINE.exec(line.trim())
+      if (!match) continue
+      const name = match[2].trim().replace(/\.app$/i, '')
+      apps.set(match[1], name === '(null)' ? '' : name)
+    }
   } catch (error) {
     console.error('[apps-mac] mdfind failed, relying on the directory scan:', error)
+  }
+  return apps
+}
+
+/** `.app` bundles directly inside `dir`; empty if it can't be read. */
+async function appsIn(dir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    return entries.filter((entry) => entry.name.endsWith('.app')).map((entry) => join(dir, entry.name))
+  } catch {
     return []
   }
 }
 
-/** `.app` bundles sitting directly in an `APP_DIRS` folder; unreadable folders are skipped. */
+/**
+ * `.app` bundles sitting directly in an `APP_DIRS` folder, plus any each of
+ * those embeds in its `Contents/Applications` (see `EMBEDDED_APPS_DIR`).
+ */
 async function scanAppDirs(): Promise<string[]> {
-  const scans = await Promise.all(
-    APP_DIRS.map(async (dir) => {
-      try {
-        const entries = await readdir(dir, { withFileTypes: true })
-        return entries
-          .filter((entry) => entry.name.endsWith('.app'))
-          .map((entry) => join(dir, entry.name))
-      } catch {
-        return []
-      }
-    })
+  const topLevel = (await Promise.all(APP_DIRS.map(appsIn))).flat()
+  const embedded = await Promise.all(
+    topLevel.map((path) => appsIn(join(path, 'Contents', 'Applications')))
   )
-  return scans.flat()
+  return [...topLevel, ...embedded.flat()]
 }
 
 /**
- * Drops nested bundles (helpers, XPC services, `.app`s bundled inside another
- * app's `Contents/`) and anything matching the skip pattern, keeping only
- * user-facing top-level applications.
+ * Drops nested bundles (helpers, XPC services, `.app`s bundled elsewhere in
+ * another app's `Contents/`) and anything matching the skip pattern, keeping
+ * only user-facing top-level applications — and the ones a top-level app
+ * embeds in `Contents/Applications` for launching on their own.
  */
 function isTopLevelApp(path: string): boolean {
+  const embedIndex = path.indexOf(EMBEDDED_APPS_DIR)
+  if (embedIndex !== -1) {
+    const rest = path.slice(embedIndex + EMBEDDED_APPS_DIR.length)
+    if (rest.includes('/')) return false
+    return isTopLevelApp(path.slice(0, embedIndex + '.app'.length)) && !SKIP_NAME_PATTERN.test(basename(path, '.app'))
+  }
   if (path.includes('.app/')) return false
   if (!isInAppRoot(path) && !CORE_SERVICE_APPS.has(path)) return false
   const name = basename(path, '.app')
@@ -293,11 +323,13 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 }
 
 export async function listMacApplications(): Promise<AppsWorkerResult> {
-  const appPaths = (await collectAppPaths()).filter(isTopLevelApp)
+  const { paths, displayNames } = await collectAppPaths()
+  const appPaths = paths.filter(isTopLevelApp)
+  const titleOf = (path: string) => displayNames.get(path) || basename(path, '.app')
 
   const seenNames = new Set<string>()
   const uniquePaths = appPaths.filter((path) => {
-    const name = basename(path, '.app').toLowerCase()
+    const name = titleOf(path).toLowerCase()
     if (seenNames.has(name)) return false
     seenNames.add(name)
     return true
@@ -306,12 +338,19 @@ export async function listMacApplications(): Promise<AppsWorkerResult> {
   const icons = await mapLimit(uniquePaths, ICON_CONCURRENCY, resolveIcon)
   if (uniquePaths.length > 0) await pruneIconCache()
 
-  const shortcuts: ShortcutAppResult[] = uniquePaths.map((path, index) => ({
-    kind: 'shortcut',
-    path,
-    title: basename(path, '.app'),
-    icon: icons[index]
-  }))
+  const shortcuts: ShortcutAppResult[] = uniquePaths.map((path, index) => {
+    const title = titleOf(path)
+    const fileName = basename(path, '.app')
+    return {
+      kind: 'shortcut',
+      path,
+      title,
+      icon: icons[index],
+      // Keep the bundle's file name searchable when the display name differs
+      // (a localized name, or "Device Hub" vs `DeviceHub.app`).
+      altNames: fileName !== title ? [fileName] : undefined
+    }
+  })
 
   // Steam games live under ~/Library/Application Support/Steam, outside every
   // app root above, so they come from Steam's own library instead.

@@ -60,8 +60,9 @@ export interface ShortcutAppResult {
   /** Linux: the entry's `Terminal=true`, meaning it must run inside a terminal emulator. */
   terminal?: boolean
   /**
-   * Linux: other names the app goes by — its `GenericName`, executable and
-   * reverse-DNS id stem (Files → "File Manager", "nautilus"). Fuzzy-matched.
+   * Other names the app goes by, fuzzy-matched. macOS: the bundle's file
+   * name, when its display name differs. Linux: its `GenericName`, executable
+   * and reverse-DNS id stem (Files → "File Manager", "nautilus").
    */
   altNames?: string[]
   /** Linux: the entry's `Keywords`, lowercased single words — see `searchWords` on `Action`. */
